@@ -1,149 +1,116 @@
 import { useEffect, useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
 import './App.css'
-import { db, storage } from './firebaseConfig'
-import { collection, addDoc, getDocs } from 'firebase/firestore'
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
+import { auth } from './firebaseConfig'
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged,
+} from 'firebase/auth'
 
 function App() {
-  const [count, setCount] = useState(0)
-  const [firebaseStatus, setFirebaseStatus] = useState('Firebase tests not run')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [user, setUser] = useState(null)
+  const [message, setMessage] = useState('Please sign in or sign up')
+  const [loading, setLoading] = useState(false)
 
   useEffect(() => {
-    async function runTests() {
-      try {
-        await addDoc(collection(db, 'test'), { time: Date.now() })
-        const snapshot = await getDocs(collection(db, 'test'))
-
-        const fileRef = ref(storage, `test-${Date.now()}.txt`)
-        const blob = new Blob(['firebase storage test'], { type: 'text/plain' })
-        await uploadBytes(fileRef, blob)
-        const url = await getDownloadURL(fileRef)
-
-        console.log('Firestore docs:', snapshot.size)
-        console.log('Storage URL:', url)
-        setFirebaseStatus(`Firestore OK (${snapshot.size} docs), Storage OK`)
-      } catch (err) {
-        console.error('Firebase test error:', err)
-        setFirebaseStatus(`Firebase test error: ${err.message}`)
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser)
+      if (currentUser) {
+        setMessage(`Signed in as ${currentUser.email}`)
+      } else {
+        setMessage('Please sign in or sign up')
       }
-    }
-
-    runTests()
+    })
+    return unsubscribe
   }, [])
 
+  const handleSignUp = async () => {
+    setLoading(true)
+    setMessage('Creating account...')
+    try {
+      await createUserWithEmailAndPassword(auth, email, password)
+      setMessage('Account created! You are signed in.')
+    } catch (err) {
+      setMessage(`Sign-up error: ${err.message}`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleSignIn = async () => {
+    setLoading(true)
+    setMessage('Signing in...')
+    try {
+      await signInWithEmailAndPassword(auth, email, password)
+      setMessage('Signed in successfully.')
+    } catch (err) {
+      setMessage(`Sign-in error: ${err.message}`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleSignOut = async () => {
+    setLoading(true)
+    setMessage('Signing out...')
+    try {
+      await signOut(auth)
+      setMessage('Signed out successfully.')
+    } catch (err) {
+      setMessage(`Sign-out error: ${err.message}`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div style={{ marginTop: 12 }}>{firebaseStatus}</div>
-        <div>
-          <h1>Get started</h1>
+    <div className="auth-container">
+      <h1>Firebase Email/Password Auth</h1>
+      <p>{message}</p>
+
+      {user ? (
+        <div className="signed-in">
           <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
+            Signed in as <strong>{user.email}</strong>
           </p>
+          <button onClick={handleSignOut} disabled={loading}>
+            Sign out
+          </button>
         </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
-
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
+      ) : (
+        <div className="auth-form">
+          <label>
+            Email
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+            />
+          </label>
+          <label>
+            Password
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Minimum 6 characters"
+            />
+          </label>
+          <div className="button-row">
+            <button onClick={handleSignIn} disabled={loading || !email || !password}>
+              Sign in
+            </button>
+            <button onClick={handleSignUp} disabled={loading || !email || !password}>
+              Sign up
+            </button>
+          </div>
         </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+      )}
+    </div>
   )
 }
 
