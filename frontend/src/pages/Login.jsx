@@ -185,20 +185,6 @@ function Login() {
             {
     /* Demo credentials */
   }
-            <div
-    className="mt-6 p-3.5 rounded-lg"
-    style={{ backgroundColor: "#F8F9FA", border: "1px solid #E9EAEC" }}
-  >
-              <p className="text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 600 }}>
-                Demo Credentials
-              </p>
-              <p className="text-xs mb-0.5" style={{ color: "#888" }}>
-                <span style={{ color: BS_GRAY, fontWeight: 500 }}>Admin:</span> admin@brandsafway.com / admin123
-              </p>
-              <p className="text-xs" style={{ color: "#888" }}>
-                <span style={{ color: BS_GRAY, fontWeight: 500 }}>Customer:</span> john@acmecorp.com / customer123
-              </p>
-            </div>
           </div>
         </div>
       </div>
