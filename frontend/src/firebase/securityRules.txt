@@ -1,0 +1,53 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function currentUserProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isActiveAdmin() {
+      return signedIn()
+        && currentUserProfile().role == "admin"
+        && currentUserProfile().status == "active";
+    }
+
+    match /users/{userId} {
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.role == "customer"
+        && request.resource.data.status == "pending";
+
+      allow read: if signedIn()
+        && (request.auth.uid == userId || isActiveAdmin());
+
+      allow update: if isActiveAdmin()
+        || (
+          signedIn()
+          && request.auth.uid == userId
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+            "emailVerified",
+            "emailVerifiedAt"
+          ])
+        );
+
+      allow delete: if isActiveAdmin();
+    }
+
+    match /documents/{documentId} {
+      allow read, write: if isActiveAdmin();
+    }
+
+    match /accessRequests/{requestId} {
+      allow read, write: if isActiveAdmin();
+    }
+
+    match /auditLog/{auditId} {
+      allow read, write: if isActiveAdmin();
+    }
+  }
+}

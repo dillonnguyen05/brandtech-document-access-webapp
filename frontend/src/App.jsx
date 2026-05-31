@@ -8,7 +8,8 @@ function ProtectedRoute({
   children,
   role
 }) {
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
+  if (loading) return <LoadingScreen />;
   if (!user) return <Navigate to="/login" replace />;
   if (user.role !== role) {
     return <Navigate to={user.role === "admin" ? "/admin" : "/dashboard"} replace />;
@@ -16,7 +17,8 @@ function ProtectedRoute({
   return <>{children}</>;
 }
 function AppRoutes() {
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
+  if (loading) return <LoadingScreen />;
   return <Routes>
       <Route
     path="/"
@@ -38,6 +40,11 @@ function AppRoutes() {
   />
       <Route path="*" element={<Navigate to="/login" replace />} />
     </Routes>;
+}
+function LoadingScreen() {
+  return <div className="grid min-h-screen place-items-center bg-[#F7F8F9] text-sm font-medium text-[#565A5C]">
+      Loading...
+    </div>;
 }
 function App() {
   return <AuthProvider>

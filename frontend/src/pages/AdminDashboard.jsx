@@ -1,6 +1,15 @@
 import { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router";
 import {
+  collection,
+  doc,
+  onSnapshot,
+  query,
+  serverTimestamp,
+  updateDoc,
+  where
+} from "firebase/firestore";
+import {
   LayoutDashboard,
   FileText,
   ClipboardList,
@@ -21,6 +30,7 @@ import {
   UserCircle
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
+import { db } from "../firebase/firebaseConfig";
 import {
   INITIAL_DOCUMENTS,
   INITIAL_REQUESTS,
@@ -53,10 +63,29 @@ const NAV = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { key: "documents", label: "Documents", icon: FileText },
   { key: "requests", label: "Access Requests", icon: ClipboardList },
+  { key: "users", label: "User Approvals", icon: Users },
   { key: "audit", label: "Audit Log", icon: History },
   { key: "settings", label: "Settings", icon: Settings },
   { key: "profile", label: "Profile", icon: UserCircle }
 ];
+function formatDate(value) {
+  if (!value) return "—";
+  if (typeof value.toDate === "function") {
+    return value.toDate().toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric"
+    });
+  }
+  if (value instanceof Date) {
+    return value.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric"
+    });
+  }
+  return String(value);
+}
 function AdminDashboard() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
@@ -76,6 +105,9 @@ function AdminDashboard() {
   const [requests, setRequests] = useState(INITIAL_REQUESTS);
   const [documents, setDocuments] = useState(INITIAL_DOCUMENTS);
   const [auditLog, setAuditLog] = useState(INITIAL_AUDIT);
+  const [pendingUsers, setPendingUsers] = useState([]);
+  const [userApprovalError, setUserApprovalError] = useState("");
+  const [updatingUserId, setUpdatingUserId] = useState("");
   const [search, setSearch] = useState("");
   const [notifOpen, setNotifOpen] = useState(false);
   const [uploadTitle, setUploadTitle] = useState("");
@@ -94,6 +126,32 @@ function AdminDashboard() {
   const pendingCount = requests.filter((r) => r.status === "pending").length;
   const approvedCount = requests.filter((r) => r.status === "approved").length;
   const uniqueCustomers = new Set(requests.map((r) => r.customerId)).size;
+  useEffect(() => {
+    const pendingUsersQuery = query(
+      collection(db, "users"),
+      where("status", "==", "pending")
+    );
+    const unsubscribe = onSnapshot(
+      pendingUsersQuery,
+      (snapshot) => {
+        const customers = snapshot.docs
+          .map((pendingUserDoc) => ({
+            id: pendingUserDoc.id,
+            ...pendingUserDoc.data()
+          }))
+          .filter((pendingUser) => pendingUser.role === "customer");
+
+        setPendingUsers(customers);
+        setUserApprovalError("");
+      },
+      (error) => {
+        console.error(error);
+        setUserApprovalError("Unable to load pending users.");
+      }
+    );
+
+    return unsubscribe;
+  }, []);
   const approveRequest = (id) => {
     const req = requests.find((r) => r.id === id);
     if (!req) return;
@@ -188,6 +246,40 @@ function AdminDashboard() {
     if (fileRef.current) fileRef.current.value = "";
     setTimeout(() => setUploadDone(false), 3e3);
   };
+  const approveUser = async (userId) => {
+    setUpdatingUserId(userId);
+    setUserApprovalError("");
+    try {
+      await updateDoc(doc(db, "users", userId), {
+        status: "active",
+        approvedAt: serverTimestamp(),
+        approvedBy: user?.id || user?.email || "admin",
+        deniedAt: null,
+        deniedBy: null
+      });
+    } catch (error) {
+      console.error(error);
+      setUserApprovalError("Unable to approve user. Check Firestore permissions.");
+    } finally {
+      setUpdatingUserId("");
+    }
+  };
+  const denyUser = async (userId) => {
+    setUpdatingUserId(userId);
+    setUserApprovalError("");
+    try {
+      await updateDoc(doc(db, "users", userId), {
+        status: "denied",
+        deniedAt: serverTimestamp(),
+        deniedBy: user?.id || user?.email || "admin"
+      });
+    } catch (error) {
+      console.error(error);
+      setUserApprovalError("Unable to deny user. Check Firestore permissions.");
+    } finally {
+      setUpdatingUserId("");
+    }
+  };
   return <div className="flex h-screen w-full overflow-hidden" style={{ backgroundColor: BS_LIGHT }}>
       {
     /* Sidebar */
@@ -228,7 +320,7 @@ function AdminDashboard() {
               Main
             </p>
             <div className="space-y-0.5">
-              {NAV.slice(0, 3).map(({ key, label, icon: Icon }) => {
+              {NAV.slice(0, 4).map(({ key, label, icon: Icon }) => {
     const active = section === key;
     return <NavButton
       key={key}
@@ -236,7 +328,7 @@ function AdminDashboard() {
       label={label}
       Icon={Icon}
       active={active}
-      badge={key === "requests" && pendingCount > 0 ? pendingCount : void 0}
+      badge={key === "requests" && pendingCount > 0 ? pendingCount : key === "users" && pendingUsers.length > 0 ? pendingUsers.length : void 0}
       onClick={() => setSection(key)}
     />;
   })}
@@ -250,7 +342,7 @@ function AdminDashboard() {
               Management
             </p>
             <div className="space-y-0.5">
-              {NAV.slice(3, 5).map(({ key, label, icon: Icon }) => {
+              {NAV.slice(4, 6).map(({ key, label, icon: Icon }) => {
     const active = section === key;
     return <NavButton
       key={key}
@@ -271,7 +363,7 @@ function AdminDashboard() {
               Account
             </p>
             <div className="space-y-0.5">
-              {NAV.slice(5).map(({ key, label, icon: Icon }) => {
+              {NAV.slice(6).map(({ key, label, icon: Icon }) => {
     const active = section === key;
     return <NavButton
       key={key}
@@ -370,11 +462,11 @@ function AdminDashboard() {
     className="relative p-2 rounded-lg hover:bg-gray-100 transition-colors"
   >
               <Bell size={18} style={{ color: BS_GRAY }} />
-              {pendingCount > 0 && <span
+              {pendingCount + pendingUsers.length > 0 && <span
     className="absolute top-1 right-1 h-4 w-4 rounded-full text-xs flex items-center justify-center"
     style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 700 }}
   >
-                  {pendingCount}
+                  {pendingCount + pendingUsers.length}
                 </span>}
             </button>
             <div className="relative pl-2 border-l border-gray-200" ref={dropdownRef}>
@@ -467,6 +559,13 @@ function AdminDashboard() {
     onUpload={handleUpload}
   />}
           {section === "requests" && <RequestsContent requests={requests} onApprove={approveRequest} onDeny={denyRequest} />}
+          {section === "users" && <UserApprovalsContent
+    pendingUsers={pendingUsers}
+    error={userApprovalError}
+    updatingUserId={updatingUserId}
+    onApprove={approveUser}
+    onDeny={denyUser}
+  />}
           {section === "audit" && <AuditContent auditLog={auditLog} onRevoke={revokeAccess} onGrant={grantAccess} requests={requests} />}
           {section === "settings" && <SettingsContent user={user} />}
           {section === "profile" && <AdminProfileContent user={user} profilePic={profilePic} setProfilePic={setProfilePic} />}
@@ -781,6 +880,93 @@ function RequestsTable({ requests, onApprove, onDeny }) {
             </tr>}
         </tbody>
       </table>
+    </div>;
+}
+function UserApprovalsContent({
+  pendingUsers,
+  error,
+  updatingUserId,
+  onApprove,
+  onDeny
+}) {
+  return <div className="bg-white rounded-xl border border-gray-100">
+      <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+        <div>
+          <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Pending User Approvals</h3>
+          <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>Review new customer accounts before they can access the portal</p>
+        </div>
+        {pendingUsers.length > 0 && <span
+    className="text-xs px-2.5 py-1 rounded-full"
+    style={{ backgroundColor: "rgba(242,169,0,0.12)", color: "#A37200", fontWeight: 500 }}
+  >
+            {pendingUsers.length} pending
+          </span>}
+      </div>
+
+      {error && <div className="mx-5 mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
+          {error}
+        </div>}
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr style={{ backgroundColor: "#FAFAFA" }}>
+              {["Customer", "Company", "Email", "Phone", "Email Status", "Registered", "Action"].map((h) => <th key={h} className="px-4 py-3 text-left text-xs border-b border-gray-100" style={{ color: BS_GRAY, fontWeight: 500 }}>
+                  {h}
+                </th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {pendingUsers.map((pendingUser, i) => {
+    const isUpdating = updatingUserId === pendingUser.id;
+    return <tr key={pendingUser.id} style={{ borderBottom: i < pendingUsers.length - 1 ? "1px solid #F3F4F6" : "none" }}>
+                <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>{pendingUser.name || "—"}</td>
+                <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{pendingUser.company || "—"}</td>
+                <td className="px-4 py-3.5 text-xs" style={{ color: BS_BLACK }}>{pendingUser.email || "—"}</td>
+                <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{pendingUser.phone || "—"}</td>
+                <td className="px-4 py-3.5">
+                  <span
+        className="text-xs px-2 py-0.5 rounded-full"
+        style={{
+          backgroundColor: pendingUser.emailVerified ? "rgba(34,197,94,0.12)" : "rgba(242,169,0,0.12)",
+          color: pendingUser.emailVerified ? "#166534" : "#A37200",
+          fontWeight: 500
+        }}
+      >
+                    {pendingUser.emailVerified ? "Verified" : "Not verified"}
+                  </span>
+                </td>
+                <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{formatDate(pendingUser.createdAt)}</td>
+                <td className="px-4 py-3.5">
+                  <div className="flex items-center gap-2">
+                    <button
+          onClick={() => onApprove(pendingUser.id)}
+          disabled={isUpdating}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80 disabled:opacity-50"
+          style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 500 }}
+        >
+                      <CheckCircle size={12} /> {isUpdating ? "Saving..." : "Approve"}
+                    </button>
+                    <button
+          onClick={() => onDeny(pendingUser.id)}
+          disabled={isUpdating}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80 border disabled:opacity-50"
+          style={{ borderColor: BS_MAROON, color: BS_MAROON }}
+        >
+                      <XCircle size={12} /> Deny
+                    </button>
+                  </div>
+                </td>
+              </tr>;
+  })}
+            {pendingUsers.length === 0 && <tr>
+                <td colSpan={7} className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
+                  No pending customer approvals.
+                </td>
+              </tr>}
+          </tbody>
+        </table>
+      </div>
     </div>;
 }
 function AuditContent({ auditLog, onRevoke, onGrant, requests }) {

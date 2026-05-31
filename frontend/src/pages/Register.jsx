@@ -19,6 +19,7 @@ function Register() {
   const [showConfirm, setShowConfirm] = useState(false);
   const [agreed, setAgreed] = useState(false);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(false);
   const { register } = useAuth();
   const navigate = useNavigate();
@@ -26,6 +27,7 @@ function Register() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
+    setSuccess("");
     if (form.password !== form.confirmPassword) {
       setError("Passwords do not match.");
       return;
@@ -40,10 +42,11 @@ function Register() {
     }
     setLoading(true);
     await new Promise((r) => setTimeout(r, 450));
-    const result = register(form);
+    const result = await register(form);
     setLoading(false);
     if (result.success) {
-      navigate("/dashboard");
+      setSuccess(result.message || "Account created. Please verify your email before signing in.");
+      setTimeout(() => navigate("/login"), 3000);
     } else {
       setError(result.error || "Registration failed.");
     }
@@ -122,6 +125,10 @@ function Register() {
 
             {error && <div className="mb-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
                 {error}
+              </div>}
+
+            {success && <div className="mb-4 px-4 py-3 rounded-lg text-sm text-green-700 bg-green-50 border border-green-100">
+                {success}
               </div>}
 
             <form onSubmit={handleSubmit} className="space-y-3.5">

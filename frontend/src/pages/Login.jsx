@@ -19,7 +19,7 @@ function Login() {
     setError("");
     setLoading(true);
     await new Promise((r) => setTimeout(r, 450));
-    const result = login(email, password);
+    const result = await login(email, password);
     setLoading(false);
     if (result.success) {
       navigate(result.role === "admin" ? "/admin" : "/dashboard");
