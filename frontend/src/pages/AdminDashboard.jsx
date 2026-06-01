@@ -37,7 +37,10 @@ import {
   INITIAL_AUDIT
 } from "../data/mockData";
 import logo from "../imports/brandtech.jpg";
-import {uploadDocument} from "../services/documentService.js"
+import {
+  listenToDocuments,
+  uploadDocument
+} from "../services/documentService.js";
 const BS_BLACK = "#101820";
 const BS_GOLD = "#F2A900";
 const BS_MAROON = "#8A2A2B";
@@ -119,6 +122,8 @@ function AdminDashboard() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [uploadDone, setUploadDone] = useState(false);
+  const [uploadError, setUploadError] = useState("");
+  const [documentLoadError, setDocumentLoadError] = useState("");
   const fileRef = useRef(null);
   const handleLogout = () => {
     logout();
@@ -148,6 +153,20 @@ function AdminDashboard() {
       (error) => {
         console.error(error);
         setUserApprovalError("Unable to load pending users.");
+      }
+    );
+
+    return unsubscribe;
+  }, []);
+  useEffect(() => {
+    const unsubscribe = listenToDocuments(
+      (firestoreDocuments) => {
+        setDocuments(firestoreDocuments);
+        setDocumentLoadError("");
+      },
+      (error) => {
+        console.error(error);
+        setDocumentLoadError("Unable to load uploaded documents.");
       }
     );
 
@@ -222,31 +241,40 @@ function AdminDashboard() {
   const handleUpload = async (e) => {
     e.preventDefault();
     if (!uploadTitle) return;
+    if (!uploadFile) {
+      setUploadError("Please select a file.");
+      return;
+    }
+
     setUploading(true);
     setUploadProgress(0);
     setUploadDone(false);
-    for (let i = 0; i <= 100; i += 10) {
-      await new Promise((r) => setTimeout(r, 80));
-      setUploadProgress(i);
+    setUploadError("");
+
+    try {
+      await uploadDocument(
+        uploadFile,
+        {
+          title: uploadTitle,
+          type: uploadType,
+          category: uploadCategory,
+          targetCustomer: uploadCustomer
+        },
+        user,
+        setUploadProgress
+      );
+
+      setUploadDone(true);
+      setUploadTitle("");
+      setUploadFile(null);
+      if (fileRef.current) fileRef.current.value = "";
+      setTimeout(() => setUploadDone(false), 3e3);
+    } catch (error) {
+      console.error(error);
+      setUploadError(error.message || "Unable to upload document.");
+    } finally {
+      setUploading(false);
     }
-    const now = /* @__PURE__ */ new Date();
-    const newDoc = {
-      id: `d${Date.now()}`,
-      title: uploadTitle,
-      type: uploadType,
-      category: uploadCategory,
-      uploadedDate: now.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
-      size: uploadFile ? `${(uploadFile.size / (1024 * 1024)).toFixed(1)} MB` : "\u2014",
-      uploadedBy: user?.name || "Admin"
-    };
-    setDocuments((prev) => [newDoc, ...prev]);
-    setUploading(false);
-    setUploadDone(true);
-    setUploadTitle("");
-    setUploadFile(null);
-    if (fileRef.current) fileRef.current.value = "";
-    setTimeout(() => setUploadDone(false), 3e3);
-    await uploadDocument(uploadFile, setUploadProgress);
   };
   const approveUser = async (userId) => {
     setUpdatingUserId(userId);
@@ -557,6 +585,8 @@ function AdminDashboard() {
     uploadProgress={uploadProgress}
     uploading={uploading}
     uploadDone={uploadDone}
+    uploadError={uploadError}
+    documentLoadError={documentLoadError}
     fileRef={fileRef}
     onUpload={handleUpload}
   />}
@@ -681,6 +711,8 @@ function DocumentsContent({
   uploadProgress,
   uploading,
   uploadDone,
+  uploadError,
+  documentLoadError,
   fileRef,
   onUpload
 }) {
@@ -779,6 +811,10 @@ function DocumentsContent({
               Document uploaded successfully.
             </div>}
 
+          {uploadError && <div className="md:col-span-2 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
+              {uploadError}
+            </div>}
+
           <div className="md:col-span-2">
             <button
     type="submit"
@@ -800,6 +836,9 @@ function DocumentsContent({
           <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>All Documents</h3>
           <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>{documents.length} documents on record</p>
         </div>
+        {documentLoadError && <div className="mx-5 mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
+            {documentLoadError}
+          </div>}
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
