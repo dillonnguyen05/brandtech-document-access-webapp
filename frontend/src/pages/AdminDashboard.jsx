@@ -37,6 +37,7 @@ import {
   INITIAL_AUDIT
 } from "../data/mockData";
 import logo from "../imports/brandtech.jpg";
+import {uploadDocument} from "../services/documentService.js"
 const BS_BLACK = "#101820";
 const BS_GOLD = "#F2A900";
 const BS_MAROON = "#8A2A2B";
@@ -245,6 +246,7 @@ function AdminDashboard() {
     setUploadFile(null);
     if (fileRef.current) fileRef.current.value = "";
     setTimeout(() => setUploadDone(false), 3e3);
+    await uploadDocument(uploadFile, setUploadProgress);
   };
   const approveUser = async (userId) => {
     setUpdatingUserId(userId);
@@ -756,6 +758,7 @@ function DocumentsContent({
     accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
     onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
   />
+  
           </div>
 
           {uploading && <div className="md:col-span-2">
