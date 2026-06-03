@@ -309,11 +309,15 @@ function Register() {
                 <label htmlFor="terms" className="text-sm cursor-pointer select-none" style={{ color: BS_GRAY }}>
                   I agree to the{" "}
                   <button type="button" className="hover:underline" style={{ color: BS_BLACK }}>
-                    Terms of Service
+                    <a href="https://brandsafway.com/terms-of-use" target="_blank" rel="noopener noreferrer">
+                      Terms of Service
+                    </a>
                   </button>{" "}
                   and{" "}
                   <button type="button" className="hover:underline" style={{ color: BS_BLACK }}>
-                    Privacy Policy
+                    <a href="https://brandsafway.com/privacy-policy" target="_blank" rel="noopener noreferrer">
+                      Privacy Policy
+                    </a>
                   </button>
                 </label>
               </div>
