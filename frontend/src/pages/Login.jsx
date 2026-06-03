@@ -123,7 +123,7 @@ function Login() {
     type="email"
     value={email}
     onChange={(e) => setEmail(e.target.value)}
-    placeholder="you@company.com"
+    placeholder="you@brandsafway.com"
     required
     className="w-full pl-9 pr-4 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900] focus:border-transparent transition-all"
     style={{ color: BS_BLACK }}
