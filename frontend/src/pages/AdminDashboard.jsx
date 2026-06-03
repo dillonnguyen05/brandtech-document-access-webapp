@@ -20,6 +20,8 @@ import {
   Bell,
   ChevronDown,
   Upload,
+  Download,
+  Eye,
   CheckCircle,
   XCircle,
   RotateCcw,
@@ -31,6 +33,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { db } from "../firebase/firebaseConfig";
+import DocumentPreviewModal from "../components/DocumentPreviewModal";
 import {
   INITIAL_DOCUMENTS,
   INITIAL_REQUESTS,
@@ -41,6 +44,15 @@ import {
   listenToDocuments,
   uploadDocument
 } from "../services/documentService.js";
+import {
+  listenToAccessRequests,
+  updateAccessRequestStatus
+} from "../services/requestService.js";
+import { listenToActiveCustomers } from "../services/userService.js";
+import {
+  createAccessDecisionNotification,
+  createAccountApprovalNotification
+} from "../services/notificationService.js";
 const BS_BLACK = "#101820";
 const BS_GOLD = "#F2A900";
 const BS_MAROON = "#8A2A2B";
@@ -117,14 +129,24 @@ function AdminDashboard() {
   const [uploadTitle, setUploadTitle] = useState("");
   const [uploadType, setUploadType] = useState("PDF");
   const [uploadCategory, setUploadCategory] = useState("Safety");
-  const [uploadCustomer, setUploadCustomer] = useState("All Customers");
+  const [uploadTargetType, setUploadTargetType] = useState("all");
+  const [uploadTargetCompany, setUploadTargetCompany] = useState("");
+  const [uploadTargetCustomerId, setUploadTargetCustomerId] = useState("");
   const [uploadFile, setUploadFile] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [uploadDone, setUploadDone] = useState(false);
   const [uploadError, setUploadError] = useState("");
   const [documentLoadError, setDocumentLoadError] = useState("");
+  const [requestLoadError, setRequestLoadError] = useState("");
+  const [activeCustomers, setActiveCustomers] = useState([]);
+  const [activeCustomerError, setActiveCustomerError] = useState("");
+  const [previewDocument, setPreviewDocument] = useState(null);
   const fileRef = useRef(null);
+  const activeCompanies = Array.from(
+    new Set(activeCustomers.map((customer) => customer.company).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b));
+  const selectedTargetCustomer = activeCustomers.find((customer) => customer.id === uploadTargetCustomerId);
   const handleLogout = () => {
     logout();
     navigate("/login");
@@ -172,37 +194,77 @@ function AdminDashboard() {
 
     return unsubscribe;
   }, []);
-  const approveRequest = (id) => {
+  useEffect(() => {
+    const unsubscribe = listenToAccessRequests(
+      (firestoreRequests) => {
+        setRequests(firestoreRequests);
+        setRequestLoadError("");
+      },
+      (error) => {
+        console.error(error);
+        setRequestLoadError("Unable to load access requests.");
+      }
+    );
+
+    return unsubscribe;
+  }, []);
+  useEffect(() => {
+    const unsubscribe = listenToActiveCustomers(
+      (customers) => {
+        setActiveCustomers(customers);
+        setActiveCustomerError("");
+      },
+      (error) => {
+        console.error(error);
+        setActiveCustomerError("Unable to load active customers.");
+      }
+    );
+
+    return unsubscribe;
+  }, []);
+  const approveRequest = async (id) => {
     const req = requests.find((r) => r.id === id);
     if (!req) return;
-    setRequests((prev) => prev.map((r) => r.id === id ? { ...r, status: "approved" } : r));
-    const entry = {
-      id: `a${Date.now()}`,
-      customer: req.customerName,
-      company: req.company,
-      document: req.documentTitle,
-      action: "Access Granted",
-      admin: user?.name || "Admin",
-      timestamp: (/* @__PURE__ */ new Date()).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }),
-      requestId: id
-    };
-    setAuditLog((prev) => [entry, ...prev]);
+    try {
+      await updateAccessRequestStatus(id, "approved", user);
+      await createAccessDecisionNotification(req, "approved");
+      const entry = {
+        id: `a${Date.now()}`,
+        customer: req.customerName,
+        company: req.company,
+        document: req.documentTitle,
+        action: "Access Granted",
+        admin: user?.name || "Admin",
+        timestamp: (/* @__PURE__ */ new Date()).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }),
+        requestId: id
+      };
+      setAuditLog((prev) => [entry, ...prev]);
+    } catch (error) {
+      console.error(error);
+      setRequestLoadError("Unable to approve request. Check Firestore permissions.");
+    }
   };
-  const denyRequest = (id) => {
+  const denyRequest = async (id) => {
     const req = requests.find((r) => r.id === id);
     if (!req) return;
-    setRequests((prev) => prev.map((r) => r.id === id ? { ...r, status: "denied" } : r));
-    const entry = {
-      id: `a${Date.now()}`,
-      customer: req.customerName,
-      company: req.company,
-      document: req.documentTitle,
-      action: "Access Denied",
-      admin: user?.name || "Admin",
-      timestamp: (/* @__PURE__ */ new Date()).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }),
-      requestId: id
-    };
-    setAuditLog((prev) => [entry, ...prev]);
+    try {
+      await updateAccessRequestStatus(id, "denied", user);
+      await createAccessDecisionNotification(req, "denied");
+      const entry = {
+        id: `a${Date.now()}`,
+        customer: req.customerName,
+        company: req.company,
+        document: req.documentTitle,
+        action: "Access Denied",
+        admin: user?.name || "Admin",
+        timestamp: (/* @__PURE__ */ new Date()).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }),
+        requestId: id
+      };
+      setAuditLog((prev) => [entry, ...prev]);
+    } catch (error) {
+      console.error(error);
+      setRequestLoadError("Unable to deny request. Check Firestore permissions.");
+    }
   };
   const grantAccess = (requestId) => {
     const auditEntry = auditLog.find((a) => a.requestId === requestId && (a.action === "Access Denied" || a.action === "Access Revoked"));
@@ -245,6 +307,14 @@ function AdminDashboard() {
       setUploadError("Please select a file.");
       return;
     }
+    if (uploadTargetType === "company" && !uploadTargetCompany) {
+      setUploadError("Select a target company.");
+      return;
+    }
+    if (uploadTargetType === "customer" && !uploadTargetCustomerId) {
+      setUploadError("Select a target customer.");
+      return;
+    }
 
     setUploading(true);
     setUploadProgress(0);
@@ -258,7 +328,16 @@ function AdminDashboard() {
           title: uploadTitle,
           type: uploadType,
           category: uploadCategory,
-          targetCustomer: uploadCustomer
+          targetType: uploadTargetType,
+          targetCustomer: uploadTargetType === "all"
+            ? "All Customers"
+            : uploadTargetType === "company"
+              ? uploadTargetCompany
+              : selectedTargetCustomer?.name || "Specific Customer",
+          targetCompany: uploadTargetType === "company" ? uploadTargetCompany : "",
+          targetCustomerId: uploadTargetType === "customer" ? uploadTargetCustomerId : "",
+          targetCustomerName: uploadTargetType === "customer" ? selectedTargetCustomer?.name || "" : "",
+          targetCustomerEmail: uploadTargetType === "customer" ? selectedTargetCustomer?.email || "" : ""
         },
         user,
         setUploadProgress
@@ -277,6 +356,7 @@ function AdminDashboard() {
     }
   };
   const approveUser = async (userId) => {
+    const pendingUser = pendingUsers.find((customer) => customer.id === userId);
     setUpdatingUserId(userId);
     setUserApprovalError("");
     try {
@@ -287,6 +367,7 @@ function AdminDashboard() {
         deniedAt: null,
         deniedBy: null
       });
+      await createAccountApprovalNotification(pendingUser || { id: userId });
     } catch (error) {
       console.error(error);
       setUserApprovalError("Unable to approve user. Check Firestore permissions.");
@@ -578,8 +659,15 @@ function AdminDashboard() {
     setUploadType={setUploadType}
     uploadCategory={uploadCategory}
     setUploadCategory={setUploadCategory}
-    uploadCustomer={uploadCustomer}
-    setUploadCustomer={setUploadCustomer}
+    uploadTargetType={uploadTargetType}
+    setUploadTargetType={setUploadTargetType}
+    uploadTargetCompany={uploadTargetCompany}
+    setUploadTargetCompany={setUploadTargetCompany}
+    uploadTargetCustomerId={uploadTargetCustomerId}
+    setUploadTargetCustomerId={setUploadTargetCustomerId}
+    activeCustomers={activeCustomers}
+    activeCompanies={activeCompanies}
+    activeCustomerError={activeCustomerError}
     uploadFile={uploadFile}
     setUploadFile={setUploadFile}
     uploadProgress={uploadProgress}
@@ -587,10 +675,11 @@ function AdminDashboard() {
     uploadDone={uploadDone}
     uploadError={uploadError}
     documentLoadError={documentLoadError}
+    onPreviewDocument={setPreviewDocument}
     fileRef={fileRef}
     onUpload={handleUpload}
   />}
-          {section === "requests" && <RequestsContent requests={requests} onApprove={approveRequest} onDeny={denyRequest} />}
+          {section === "requests" && <RequestsContent requests={requests} error={requestLoadError} onApprove={approveRequest} onDeny={denyRequest} />}
           {section === "users" && <UserApprovalsContent
     pendingUsers={pendingUsers}
     error={userApprovalError}
@@ -603,6 +692,7 @@ function AdminDashboard() {
           {section === "profile" && <AdminProfileContent user={user} profilePic={profilePic} setProfilePic={setProfilePic} />}
         </main>
       </div>
+      <DocumentPreviewModal document={previewDocument} onClose={() => setPreviewDocument(null)} />
     </div>;
 }
 function NavButton({
@@ -704,8 +794,15 @@ function DocumentsContent({
   setUploadType,
   uploadCategory,
   setUploadCategory,
-  uploadCustomer,
-  setUploadCustomer,
+  uploadTargetType,
+  setUploadTargetType,
+  uploadTargetCompany,
+  setUploadTargetCompany,
+  uploadTargetCustomerId,
+  setUploadTargetCustomerId,
+  activeCustomers,
+  activeCompanies,
+  activeCustomerError,
   uploadFile,
   setUploadFile,
   uploadProgress,
@@ -713,6 +810,7 @@ function DocumentsContent({
   uploadDone,
   uploadError,
   documentLoadError,
+  onPreviewDocument,
   fileRef,
   onUpload
 }) {
@@ -760,16 +858,59 @@ function DocumentsContent({
             </select>
           </div>
           <div>
-            <label className="block text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 500 }}>Target Customer</label>
+            <label className="block text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 500 }}>Target Audience</label>
             <select
-    value={uploadCustomer}
-    onChange={(e) => setUploadCustomer(e.target.value)}
+    value={uploadTargetType}
+    onChange={(e) => {
+      setUploadTargetType(e.target.value);
+      setUploadTargetCompany("");
+      setUploadTargetCustomerId("");
+    }}
     className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
     style={{ color: BS_BLACK }}
   >
-              {["All Customers", "Acme Corp", "BuildTech LLC", "Steel Works Inc"].map((c) => <option key={c}>{c}</option>)}
+              <option value="all">All active customers</option>
+              <option value="company">Specific company</option>
+              <option value="customer">Specific customer</option>
             </select>
           </div>
+          {uploadTargetType === "company" && <div>
+              <label className="block text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 500 }}>Target Company</label>
+              <select
+    value={uploadTargetCompany}
+    onChange={(e) => setUploadTargetCompany(e.target.value)}
+    className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
+    style={{ color: BS_BLACK }}
+    required
+  >
+                <option value="">Select an approved company</option>
+                {activeCompanies.map((company) => <option key={company} value={company}>{company}</option>)}
+              </select>
+              <p className="text-xs mt-1" style={{ color: "#9CA3AF" }}>
+                Companies come from approved customer accounts.
+              </p>
+            </div>}
+          {uploadTargetType === "customer" && <div>
+              <label className="block text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 500 }}>Target Customer</label>
+              <select
+    value={uploadTargetCustomerId}
+    onChange={(e) => setUploadTargetCustomerId(e.target.value)}
+    className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
+    style={{ color: BS_BLACK }}
+    required
+  >
+                <option value="">Select an approved customer</option>
+                {activeCustomers.map((customer) => <option key={customer.id} value={customer.id}>
+                    {customer.name || customer.email} {customer.company ? `— ${customer.company}` : ""}
+                  </option>)}
+              </select>
+              <p className="text-xs mt-1" style={{ color: "#9CA3AF" }}>
+                Customers must be approved before they appear here.
+              </p>
+            </div>}
+          {activeCustomerError && <div className="md:col-span-2 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
+              {activeCustomerError}
+            </div>}
           <div className="md:col-span-2">
             <label className="block text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 500 }}>File</label>
             <div
@@ -843,7 +984,7 @@ function DocumentsContent({
           <table className="w-full text-sm">
             <thead>
               <tr style={{ backgroundColor: "#FAFAFA" }}>
-                {["Title", "Category", "Type", "Date", "Size", "Uploaded By"].map((h) => <th key={h} className="px-4 py-3 text-left text-xs border-b border-gray-100" style={{ color: BS_GRAY, fontWeight: 500 }}>
+                {["Title", "Category", "Type", "Target", "Date", "Size", "Uploaded By", "Actions"].map((h) => <th key={h} className="px-4 py-3 text-left text-xs border-b border-gray-100" style={{ color: BS_GRAY, fontWeight: 500 }}>
                     {h}
                   </th>)}
               </tr>
@@ -856,23 +997,49 @@ function DocumentsContent({
                       {doc.category}
                     </span>
                   </td>
-                  <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{doc.type}</td>
-                  <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{doc.uploadedDate}</td>
-                  <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{doc.size}</td>
-                  <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{doc.uploadedBy}</td>
-                </tr>)}
-            </tbody>
-          </table>
+	                  <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{doc.type}</td>
+	                  <td className="px-4 py-3.5 text-xs" style={{ color: BS_BLACK }}>{doc.targetLabel || doc.targetCustomer || "All Customers"}</td>
+	                  <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{doc.uploadedDate}</td>
+	                  <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{doc.size}</td>
+	                  <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{doc.uploadedBy}</td>
+	                  <td className="px-4 py-3.5">
+	                    <div className="flex items-center gap-2">
+	                      <button
+	    type="button"
+	    onClick={() => onPreviewDocument(doc)}
+	    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80"
+	    style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 500 }}
+	  >
+	                        <Eye size={11} /> Preview
+	                      </button>
+	                      {doc.downloadURL && <a
+	    href={doc.downloadURL}
+	    target="_blank"
+	    rel="noreferrer"
+	    download={doc.fileName || doc.title}
+	    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
+	    style={{ borderColor: "#D1D5DB", color: BS_GRAY }}
+	  >
+	                        <Download size={11} /> Download
+	                      </a>}
+	                    </div>
+	                  </td>
+	                </tr>)}
+	            </tbody>
+	          </table>
         </div>
       </div>
     </div>;
 }
-function RequestsContent({ requests, onApprove, onDeny }) {
+function RequestsContent({ requests, error, onApprove, onDeny }) {
   return <div className="bg-white rounded-xl border border-gray-100">
       <div className="px-5 py-4 border-b border-gray-100">
         <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>All Access Requests</h3>
         <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>Manage customer document access requests</p>
       </div>
+      {error && <div className="mx-5 mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
+          {error}
+        </div>}
       <RequestsTable requests={requests} onApprove={onApprove} onDeny={onDeny} />
     </div>;
 }

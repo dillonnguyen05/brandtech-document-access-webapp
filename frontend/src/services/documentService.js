@@ -38,7 +38,12 @@ export function uploadDocument(file, documentData, user, onProgress) {
             title: documentData.title,
             type: documentData.type,
             category: documentData.category,
+            targetType: documentData.targetType || "all",
             targetCustomer: documentData.targetCustomer,
+            targetCompany: documentData.targetCompany || "",
+            targetCustomerId: documentData.targetCustomerId || "",
+            targetCustomerName: documentData.targetCustomerName || "",
+            targetCustomerEmail: documentData.targetCustomerEmail || "",
             fileName: file.name,
             fileSize: file.size,
             fileType: file.type,
@@ -83,6 +88,18 @@ function formatUploadDate(value) {
   return String(value);
 }
 
+function formatTargetLabel(data) {
+  if (data.targetType === "customer") {
+    return data.targetCustomerName || data.targetCustomer || "Specific customer";
+  }
+
+  if (data.targetType === "company") {
+    return data.targetCompany || data.targetCustomer || "Specific company";
+  }
+
+  return data.targetCustomer || "All Customers";
+}
+
 export function listenToDocuments(onDocuments, onError) {
   const documentsQuery = query(
     collection(db, "documents"),
@@ -103,7 +120,8 @@ export function listenToDocuments(onDocuments, onError) {
           category: data.category || "Uncategorized",
           uploadedDate: formatUploadDate(data.createdAt),
           size: formatFileSize(data.fileSize),
-          uploadedBy: data.uploadedByName || data.uploadedByEmail || "Admin"
+          uploadedBy: data.uploadedByName || data.uploadedByEmail || "Admin",
+          targetLabel: formatTargetLabel(data)
         };
       });
 

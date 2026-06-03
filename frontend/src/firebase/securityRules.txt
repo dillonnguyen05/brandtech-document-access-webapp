@@ -16,6 +16,12 @@ service cloud.firestore {
         && currentUserProfile().status == "active";
     }
 
+    function isActiveCustomer() {
+      return signedIn()
+        && currentUserProfile().role == "customer"
+        && currentUserProfile().status == "active";
+    }
+
     match /users/{userId} {
       allow create: if signedIn()
         && request.auth.uid == userId
@@ -39,15 +45,57 @@ service cloud.firestore {
     }
 
     match /documents/{documentId} {
-      allow read, write: if isActiveAdmin();
+      allow read: if isActiveAdmin() || isActiveCustomer();
+      allow write: if isActiveAdmin();
     }
 
     match /accessRequests/{requestId} {
-      allow read, write: if isActiveAdmin();
+      allow create: if isActiveCustomer()
+        && request.resource.data.customerId == request.auth.uid
+        && request.resource.data.status == "pending";
+
+      allow read: if isActiveAdmin()
+        || (
+          isActiveCustomer()
+          && resource.data.customerId == request.auth.uid
+        );
+
+      allow update: if isActiveAdmin()
+        || (
+          isActiveCustomer()
+          && resource.data.customerId == request.auth.uid
+          && resource.data.status == "denied"
+          && request.resource.data.customerId == request.auth.uid
+          && request.resource.data.status == "pending"
+        );
+
+      allow delete: if isActiveAdmin();
     }
 
     match /auditLog/{auditId} {
       allow read, write: if isActiveAdmin();
+    }
+
+    match /notifications/{notificationId} {
+      allow create: if isActiveAdmin();
+
+      allow read: if isActiveAdmin()
+        || (
+          isActiveCustomer()
+          && resource.data.recipientId == request.auth.uid
+        );
+
+      allow update: if isActiveAdmin()
+        || (
+          isActiveCustomer()
+          && resource.data.recipientId == request.auth.uid
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+            "read",
+            "readAt"
+          ])
+        );
+
+      allow delete: if isActiveAdmin();
     }
   }
 }

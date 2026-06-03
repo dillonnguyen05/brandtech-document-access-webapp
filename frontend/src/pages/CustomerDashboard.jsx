@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useNavigate } from "react-router";
 import {
   LayoutDashboard,
@@ -18,11 +18,16 @@ import {
   Settings
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
+import DocumentPreviewModal from "../components/DocumentPreviewModal";
+import { listenToDocuments } from "../services/documentService.js";
 import {
-  INITIAL_DOCUMENTS,
-  INITIAL_REQUESTS,
-  INITIAL_NOTIFICATIONS
-} from "../data/mockData";
+  createAccessRequest,
+  listenToCustomerRequests
+} from "../services/requestService.js";
+import {
+  listenToUserNotifications,
+  markNotificationsRead
+} from "../services/notificationService.js";
 import logo from "../imports/brandtech.jpg";
 const BS_BLACK = "#101820";
 const BS_GOLD = "#F2A900";
@@ -52,39 +57,115 @@ const NAV = [
   { key: "profile", label: "Profile", icon: User },
   { key: "settings", label: "Settings", icon: Settings }
 ];
+function documentTargetsCustomer(document, user) {
+  if (!document.targetType || document.targetType === "all") {
+    return !document.targetCustomer
+      || document.targetCustomer === "All Customers"
+      || document.targetCustomer === user?.company;
+  }
+
+  if (document.targetType === "company") {
+    return document.targetCompany === user?.company;
+  }
+
+  if (document.targetType === "customer") {
+    return document.targetCustomerId === user?.id;
+  }
+
+  return false;
+}
 function CustomerDashboard() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [section, setSection] = useState("dashboard");
-  const [myRequests, setMyRequests] = useState(
-    INITIAL_REQUESTS.filter((r) => r.customerId === user?.id)
+  const [documents, setDocuments] = useState([]);
+  const [myRequests, setMyRequests] = useState([]);
+  const [notifications, setNotifications] = useState([]);
+  const [documentLoadError, setDocumentLoadError] = useState("");
+  const [requestLoadError, setRequestLoadError] = useState("");
+  const [requestActionError, setRequestActionError] = useState("");
+  const [notificationLoadError, setNotificationLoadError] = useState("");
+  const [previewDocument, setPreviewDocument] = useState(null);
+  const customerDocuments = documents.filter((document) => documentTargetsCustomer(document, user));
+  const approvedDocIds = new Set(
+    myRequests.filter((r) => r.status === "approved").map((r) => r.documentId)
   );
-  const [notifications, setNotifications] = useState(INITIAL_NOTIFICATIONS);
-  const approvedDocs = INITIAL_DOCUMENTS.filter(
-    (doc) => myRequests.some((r) => r.documentId === doc.id && r.status === "approved")
+  const activeRequestDocIds = new Set(
+    myRequests.filter((r) => r.status === "pending" || r.status === "approved").map((r) => r.documentId)
   );
-  const requestedDocIds = new Set(myRequests.map((r) => r.documentId));
-  const availableDocs = INITIAL_DOCUMENTS.filter((doc) => !requestedDocIds.has(doc.id));
+  const approvedDocs = customerDocuments.filter((doc) => approvedDocIds.has(doc.id));
+  const availableDocs = customerDocuments.filter((doc) => !activeRequestDocIds.has(doc.id));
   const unreadCount = notifications.filter((n) => !n.read).length;
+  useEffect(() => {
+    const unsubscribe = listenToDocuments(
+      (firestoreDocuments) => {
+        setDocuments(firestoreDocuments);
+        setDocumentLoadError("");
+      },
+      (error) => {
+        console.error(error);
+        setDocumentLoadError("Unable to load documents.");
+      }
+    );
+
+    return unsubscribe;
+  }, []);
+  useEffect(() => {
+    if (!user?.id) return undefined;
+
+    const unsubscribe = listenToCustomerRequests(
+      user.id,
+      (firestoreRequests) => {
+        setMyRequests(firestoreRequests);
+        setRequestLoadError("");
+      },
+      (error) => {
+        console.error(error);
+        setRequestLoadError("Unable to load your access requests.");
+      }
+    );
+
+    return unsubscribe;
+  }, [user?.id]);
+  useEffect(() => {
+    if (!user?.id) return undefined;
+
+    const unsubscribe = listenToUserNotifications(
+      user.id,
+      (firestoreNotifications) => {
+        setNotifications(firestoreNotifications);
+        setNotificationLoadError("");
+      },
+      (error) => {
+        console.error(error);
+        setNotificationLoadError("Unable to load your notifications.");
+      }
+    );
+
+    return unsubscribe;
+  }, [user?.id]);
   const handleLogout = () => {
     logout();
     navigate("/login");
   };
-  const requestAccess = (docId, docTitle) => {
-    const newReq = {
-      id: `r${Date.now()}`,
-      customerId: user?.id || "",
-      customerName: user?.name || "",
-      company: user?.company || "",
-      documentId: docId,
-      documentTitle: docTitle,
-      dateRequested: (/* @__PURE__ */ new Date()).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
-      status: "pending"
-    };
-    setMyRequests((prev) => [...prev, newReq]);
+  const requestAccess = async (document) => {
+    setRequestActionError("");
+
+    try {
+      await createAccessRequest(user, document);
+    } catch (error) {
+      console.error(error);
+      setRequestActionError(error.message || "Unable to request document access.");
+    }
   };
-  const markAllRead = () => {
-    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+  const markAllRead = async () => {
+    try {
+      await markNotificationsRead(notifications);
+      setNotificationLoadError("");
+    } catch (error) {
+      console.error(error);
+      setNotificationLoadError("Unable to mark notifications as read.");
+    }
   };
   return <div className="flex h-screen w-full overflow-hidden" style={{ backgroundColor: BS_LIGHT }}>
       {
@@ -241,19 +322,31 @@ function CustomerDashboard() {
     availableDocs={availableDocs}
     notifications={notifications}
     onRequestAccess={requestAccess}
+    onPreviewDocument={setPreviewDocument}
     onNavigate={setSection}
   />}
-          {section === "documents" && <DocumentsSection approvedDocs={approvedDocs} />}
+          {section === "documents" && <DocumentsSection
+    approvedDocs={approvedDocs}
+    documentLoadError={documentLoadError}
+    onPreviewDocument={setPreviewDocument}
+  />}
           {section === "requests" && <RequestsSection
     myRequests={myRequests}
     availableDocs={availableDocs}
+    requestLoadError={requestLoadError}
+    requestActionError={requestActionError}
     onRequestAccess={requestAccess}
   />}
-          {section === "notifications" && <NotificationsSection notifications={notifications} onMarkAllRead={markAllRead} />}
+          {section === "notifications" && <NotificationsSection
+    notifications={notifications}
+    error={notificationLoadError}
+    onMarkAllRead={markAllRead}
+  />}
           {section === "profile" && <ProfileSection user={user} />}
           {section === "settings" && <CustomerSettingsContent user={user} />}
         </div>
       </div>
+      <DocumentPreviewModal document={previewDocument} onClose={() => setPreviewDocument(null)} />
     </div>;
 }
 function CustNavButton({
@@ -299,6 +392,7 @@ function DashboardHome({
   availableDocs,
   notifications,
   onRequestAccess,
+  onPreviewDocument,
   onNavigate
 }) {
   const pendingCount = myRequests.filter((r) => r.status === "pending").length;
@@ -372,15 +466,26 @@ function DashboardHome({
                   <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>{doc.category} · {doc.uploadedDate}</p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <button
-    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80"
-    style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 500 }}
+	              <div className="flex items-center gap-2">
+	                <button
+    onClick={() => onPreviewDocument(doc)}
+	    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80"
+	    style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 500 }}
+	  >
+	                  <ExternalLink size={11} /> Open
+	                </button>
+	                {doc.downloadURL && <a
+    href={doc.downloadURL}
+    target="_blank"
+    rel="noreferrer"
+    download={doc.fileName || doc.title}
+    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
+    style={{ borderColor: "#D1D5DB", color: BS_GRAY }}
   >
-                  <ExternalLink size={11} /> Open
-                </button>
-              </div>
-            </div>)}
+	                  <Download size={11} /> Download
+	                </a>}
+	              </div>
+	            </div>)}
         </div> : <div className="bg-white rounded-xl border border-gray-100 p-8 text-center">
           <FileText size={28} className="mx-auto mb-3" style={{ color: "#D1D5DB" }} />
           <p className="text-sm" style={{ color: BS_GRAY }}>No approved documents yet.</p>
@@ -409,19 +514,23 @@ function DashboardHome({
               <div>
                 <p className="text-sm" style={{ color: BS_BLACK, fontWeight: 500 }}>{doc.title}</p>
                 <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>{doc.category} · {doc.uploadedDate}</p>
-              </div>
-              <button
-    onClick={() => onRequestAccess(doc.id, doc.title)}
-    className="px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
-    style={{ borderColor: BS_BLACK, color: BS_BLACK }}
-  >
+	              </div>
+	              <button
+	    onClick={() => onRequestAccess(doc)}
+	    className="px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
+	    style={{ borderColor: BS_BLACK, color: BS_BLACK }}
+	  >
                 Request Access
               </button>
             </div>)}
         </div>}
     </div>;
 }
-function DocumentsSection({ approvedDocs }) {
+function DocumentsSection({
+  approvedDocs,
+  documentLoadError,
+  onPreviewDocument
+}) {
   return <div className="bg-white rounded-xl border border-gray-100">
       <div className="px-5 py-4 border-b border-gray-100">
         <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Approved Documents</h3>
@@ -429,6 +538,9 @@ function DocumentsSection({ approvedDocs }) {
           {approvedDocs.length} document{approvedDocs.length !== 1 ? "s" : ""} available to you
         </p>
       </div>
+      {documentLoadError && <div className="mx-5 mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
+          {documentLoadError}
+        </div>}
       {approvedDocs.length === 0 ? <div className="p-10 text-center">
           <FileText size={32} className="mx-auto mb-3" style={{ color: "#D1D5DB" }} />
           <p className="text-sm" style={{ color: BS_GRAY }}>No approved documents yet.</p>
@@ -464,27 +576,38 @@ function DocumentsSection({ approvedDocs }) {
                   </td>
                   <td className="px-4 py-3.5">
                     <div className="flex items-center gap-2">
-                      <button
-    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80"
-    style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 500 }}
-  >
-                        <ExternalLink size={11} /> Open
-                      </button>
-                      <button
-    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
-    style={{ borderColor: "#D1D5DB", color: BS_GRAY }}
-  >
-                        <Download size={11} /> Download
-                      </button>
-                    </div>
-                  </td>
+	                      <button
+	    onClick={() => onPreviewDocument(doc)}
+	    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80"
+	    style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 500 }}
+	  >
+	                        <ExternalLink size={11} /> Open
+	                      </button>
+	                      {doc.downloadURL && <a
+	    href={doc.downloadURL}
+	    target="_blank"
+	    rel="noreferrer"
+	    download={doc.fileName || doc.title}
+	    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
+	    style={{ borderColor: "#D1D5DB", color: BS_GRAY }}
+	  >
+	                        <Download size={11} /> Download
+	                      </a>}
+	                    </div>
+	                  </td>
                 </tr>)}
             </tbody>
           </table>
         </div>}
     </div>;
 }
-function RequestsSection({ myRequests, availableDocs, onRequestAccess }) {
+function RequestsSection({
+  myRequests,
+  availableDocs,
+  requestLoadError,
+  requestActionError,
+  onRequestAccess
+}) {
   return <div className="space-y-6">
       {
     /* Available to request */
@@ -494,6 +617,9 @@ function RequestsSection({ myRequests, availableDocs, onRequestAccess }) {
           <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Available Documents</h3>
           <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>Request access to these documents</p>
         </div>
+        {requestActionError && <div className="mx-5 mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
+            {requestActionError}
+          </div>}
         {availableDocs.length === 0 ? <div className="p-8 text-center">
             <CheckCircle size={28} className="mx-auto mb-3" style={{ color: "#22C55E" }} />
             <p className="text-sm" style={{ color: BS_GRAY }}>You've requested all available documents.</p>
@@ -516,12 +642,12 @@ function RequestsSection({ myRequests, availableDocs, onRequestAccess }) {
                     </td>
                     <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{doc.type}</td>
                     <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{doc.uploadedDate}</td>
-                    <td className="px-4 py-3.5">
-                      <button
-    onClick={() => onRequestAccess(doc.id, doc.title)}
-    className="px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80"
-    style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 500 }}
-  >
+	                    <td className="px-4 py-3.5">
+	                      <button
+	    onClick={() => onRequestAccess(doc)}
+	    className="px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80"
+	    style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 500 }}
+	  >
                         Request Access
                       </button>
                     </td>
@@ -535,11 +661,14 @@ function RequestsSection({ myRequests, availableDocs, onRequestAccess }) {
     /* My requests */
   }
       <div className="bg-white rounded-xl border border-gray-100">
-        <div className="px-5 py-4 border-b border-gray-100">
-          <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>My Requests</h3>
-          <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>Track the status of your access requests</p>
-        </div>
-        {myRequests.length === 0 ? <div className="p-8 text-center">
+	        <div className="px-5 py-4 border-b border-gray-100">
+	          <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>My Requests</h3>
+	          <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>Track the status of your access requests</p>
+	        </div>
+	        {requestLoadError && <div className="mx-5 mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
+	            {requestLoadError}
+	          </div>}
+	        {myRequests.length === 0 ? <div className="p-8 text-center">
             <ClipboardList size={28} className="mx-auto mb-3" style={{ color: "#D1D5DB" }} />
             <p className="text-sm" style={{ color: BS_GRAY }}>No requests yet.</p>
           </div> : <div className="overflow-x-auto">
@@ -550,24 +679,21 @@ function RequestsSection({ myRequests, availableDocs, onRequestAccess }) {
                       {h}
                     </th>)}
                 </tr>
-              </thead>
-              <tbody>
-                {myRequests.map((req, i) => {
-    const doc = INITIAL_DOCUMENTS.find((d) => d.id === req.documentId);
-    return <tr key={req.id} style={{ borderBottom: i < myRequests.length - 1 ? "1px solid #F3F4F6" : "none" }}>
-                      <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>{req.documentTitle}</td>
-                      <td className="px-4 py-3.5">
-                        <span className="text-xs px-2 py-0.5 rounded" style={{ backgroundColor: "#F3F4F6", color: BS_GRAY }}>
-                          {doc?.category || "\u2014"}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{req.dateRequested}</td>
-                      <td className="px-4 py-3.5">
-                        <StatusBadge status={req.status} />
-                      </td>
-                    </tr>;
-  })}
-              </tbody>
+	              </thead>
+	              <tbody>
+	                {myRequests.map((req, i) => <tr key={req.id} style={{ borderBottom: i < myRequests.length - 1 ? "1px solid #F3F4F6" : "none" }}>
+	                      <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>{req.documentTitle}</td>
+	                      <td className="px-4 py-3.5">
+	                        <span className="text-xs px-2 py-0.5 rounded" style={{ backgroundColor: "#F3F4F6", color: BS_GRAY }}>
+	                          {req.documentCategory || "\u2014"}
+	                        </span>
+	                      </td>
+	                      <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{req.dateRequested}</td>
+	                      <td className="px-4 py-3.5">
+	                        <StatusBadge status={req.status} />
+	                      </td>
+	                    </tr>)}
+	              </tbody>
             </table>
           </div>}
       </div>
@@ -575,18 +701,20 @@ function RequestsSection({ myRequests, availableDocs, onRequestAccess }) {
 }
 function NotificationsSection({
   notifications,
+  error,
   onMarkAllRead
 }) {
   const iconMap = {
     approved: <CheckCircle size={16} style={{ color: "#22C55E" }} />,
     denied: <XCircle size={16} style={{ color: BS_MAROON }} />,
-    revoked: <AlertCircle size={16} style={{ color: BS_MAROON }} />
+    revoked: <AlertCircle size={16} style={{ color: BS_MAROON }} />,
+    "account-approved": <CheckCircle size={16} style={{ color: "#22C55E" }} />
   };
   return <div className="bg-white rounded-xl border border-gray-100">
       <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
         <div>
           <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Notifications</h3>
-          <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>Updates on your document access requests</p>
+          <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>Updates on your account and document access requests</p>
         </div>
         {notifications.some((n) => !n.read) && <button
     onClick={onMarkAllRead}
@@ -596,6 +724,9 @@ function NotificationsSection({
             Mark all as read
           </button>}
       </div>
+      {error && <div className="mx-5 mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
+          {error}
+        </div>}
       <div>
         {notifications.length === 0 ? <div className="p-10 text-center">
             <Bell size={28} className="mx-auto mb-3" style={{ color: "#D1D5DB" }} />
@@ -609,7 +740,7 @@ function NotificationsSection({
     }}
   >
               <div className="p-2 rounded-lg flex-shrink-0" style={{ backgroundColor: "#F3F4F6" }}>
-                {iconMap[notif.type]}
+                {iconMap[notif.type] || <Bell size={16} style={{ color: BS_GRAY }} />}
               </div>
               <div className="flex-1">
                 <p className="text-sm" style={{ color: BS_BLACK, fontWeight: notif.read ? 400 : 500 }}>
