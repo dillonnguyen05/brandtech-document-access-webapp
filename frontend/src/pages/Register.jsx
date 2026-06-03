@@ -6,11 +6,24 @@ import logo from "../imports/brandtech.jpg";
 const BS_BLACK = "#101820";
 const BS_GOLD = "#F2A900";
 const BS_GRAY = "#565A5C";
+const COUNTRY_CODES = [
+  { label: "🇺🇸 +1", value: "+1", name: "United States" },
+  { label: "🇨🇦 +1", value: "+1", name: "Canada" },
+  { label: "🇲🇽 +52", value: "+52", name: "Mexico" },
+  { label: "🇬🇧 +44", value: "+44", name: "United Kingdom" },
+  { label: "🇮🇳 +91", value: "+91", name: "India" },
+  { label: "🇵🇭 +63", value: "+63", name: "Philippines" },
+  { label: "🇧🇷 +55", value: "+55", name: "Brazil" },
+  { label: "🇩🇪 +49", value: "+49", name: "Germany" },
+  { label: "🇫🇷 +33", value: "+33", name: "France" },
+  { label: "🇦🇺 +61", value: "+61", name: "Australia" }
+];
 function Register() {
   const [form, setForm] = useState({
     fullName: "",
     company: "",
     email: "",
+    phoneCountryCode: "+1",
     phone: "",
     password: "",
     confirmPassword: ""
@@ -24,10 +37,18 @@ function Register() {
   const { register } = useAuth();
   const navigate = useNavigate();
   const update = (field) => (e) => setForm((prev) => ({ ...prev, [field]: e.target.value }));
+  const updatePhone = (e) => {
+    const digitsOnly = e.target.value.replace(/\D/g, "");
+    setForm((prev) => ({ ...prev, phone: digitsOnly }));
+  };
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
     setSuccess("");
+    if (!form.phone || /\D/.test(form.phone)) {
+      setError("Phone number must contain numbers only with no spaces or dashes.");
+      return;
+    }
     if (form.password !== form.confirmPassword) {
       setError("Passwords do not match.");
       return;
@@ -42,7 +63,10 @@ function Register() {
     }
     setLoading(true);
     await new Promise((r) => setTimeout(r, 450));
-    const result = await register(form);
+    const result = await register({
+      ...form,
+      phone: `${form.phoneCountryCode}${form.phone}`
+    });
     setLoading(false);
     if (result.success) {
       setSuccess(result.message || "Account created. Please verify your email before signing in.");
@@ -190,18 +214,35 @@ function Register() {
                 <label className="block text-sm mb-1.5" style={{ color: BS_BLACK, fontWeight: 500 }}>
                   Phone Number
                 </label>
-                <div className="relative">
-                  <Phone size={15} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#9CA3AF" }} />
-                  <input
-    type="tel"
-    value={form.phone}
-    onChange={update("phone")}
-    placeholder="+1 (555) 000-0000"
-    required
-    className={inputClass}
+                <div className="flex gap-2">
+                  <select
+    value={form.phoneCountryCode}
+    onChange={update("phoneCountryCode")}
+    aria-label="Country code"
+    className="w-[116px] px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900] focus:border-transparent transition-all"
     style={{ color: BS_BLACK }}
-  />
+  >
+                    {COUNTRY_CODES.map((country) => <option key={`${country.name}-${country.value}`} value={country.value}>
+                        {country.label}
+                      </option>)}
+                  </select>
+                  <div className="relative flex-1">
+                    <Phone size={15} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#9CA3AF" }} />
+                    <input
+      type="tel"
+      inputMode="numeric"
+      value={form.phone}
+      onChange={updatePhone}
+      placeholder="5550000000"
+      required
+      className={inputClass}
+      style={{ color: BS_BLACK }}
+    />
+                  </div>
                 </div>
+                <p className="mt-1.5 text-xs" style={{ color: "#8B949E" }}>
+                  Use numbers only. No spaces or dashes.
+                </p>
               </div>
 
               <div>
