@@ -166,7 +166,7 @@ function Register() {
     type="text"
     value={form.fullName}
     onChange={update("fullName")}
-    placeholder="John Smith"
+    placeholder="Dillon Nguyen"
     required
     className={inputClass}
     style={{ color: BS_BLACK }}
@@ -184,7 +184,7 @@ function Register() {
     type="text"
     value={form.company}
     onChange={update("company")}
-    placeholder="Acme Corporation"
+    placeholder="BrandTech"
     required
     className={inputClass}
     style={{ color: BS_BLACK }}
@@ -202,7 +202,7 @@ function Register() {
     type="email"
     value={form.email}
     onChange={update("email")}
-    placeholder="you@company.com"
+    placeholder="you@brandsafway.com"
     required
     className={inputClass}
     style={{ color: BS_BLACK }}
