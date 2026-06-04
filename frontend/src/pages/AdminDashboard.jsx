@@ -34,11 +34,6 @@ import {
 import { useAuth } from "../context/AuthContext";
 import { db } from "../firebase/firebaseConfig";
 import DocumentPreviewModal from "../components/DocumentPreviewModal";
-import {
-  INITIAL_DOCUMENTS,
-  INITIAL_REQUESTS,
-  INITIAL_AUDIT
-} from "../data/mockData";
 import logo from "../imports/brandtech.jpg";
 import {
   listenToDocuments,
@@ -118,9 +113,9 @@ function AdminDashboard() {
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
-  const [requests, setRequests] = useState(INITIAL_REQUESTS);
-  const [documents, setDocuments] = useState(INITIAL_DOCUMENTS);
-  const [auditLog, setAuditLog] = useState(INITIAL_AUDIT);
+  const [requests, setRequests] = useState([]);
+  const [documents, setDocuments] = useState([]);
+  const [auditLog, setAuditLog] = useState([]);
   const [pendingUsers, setPendingUsers] = useState([]);
   const [userApprovalError, setUserApprovalError] = useState("");
   const [updatingUserId, setUpdatingUserId] = useState("");
@@ -1229,6 +1224,11 @@ function AuditContent({ auditLog, onRevoke, onGrant, requests }) {
                   </td>
                 </tr>;
   })}
+            {auditLog.length === 0 && <tr>
+                <td colSpan={7} className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
+                  No audit activity yet.
+                </td>
+              </tr>}
           </tbody>
         </table>
       </div>
