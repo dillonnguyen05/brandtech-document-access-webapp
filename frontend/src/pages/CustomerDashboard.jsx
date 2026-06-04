@@ -756,9 +756,6 @@ function NotificationsSection({
 function ProfileSection({ user }) {
   const picRef = useRef(null);
   const [profilePic, setProfilePic] = useState(null);
-  const [name, setName] = useState(user?.name || "");
-  const [email, setEmail] = useState(user?.email || "");
-  const [saved, setSaved] = useState(false);
   const handlePicChange = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -766,14 +763,17 @@ function ProfileSection({ user }) {
     reader.onload = (ev) => setProfilePic(ev.target?.result);
     reader.readAsDataURL(file);
   };
-  const handleSave = () => {
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2500);
-  };
+  const profileFields = [
+    ["Full Name", user?.name || "—"],
+    ["Email Address", user?.email || "—"],
+    ["Company", user?.company || "—"],
+    ["Role", "Customer"]
+  ];
+
   return <div className="w-full space-y-6">
       <div>
         <h2 className="text-base" style={{ color: BS_BLACK, fontWeight: 600 }}>My Profile</h2>
-        <p className="text-sm mt-0.5" style={{ color: BS_GRAY }}>Manage your personal information and avatar.</p>
+        <p className="text-sm mt-0.5" style={{ color: BS_GRAY }}>Review your account information and manage your avatar.</p>
       </div>
 
       {
@@ -827,55 +827,24 @@ function ProfileSection({ user }) {
       <div className="bg-white rounded-xl border border-gray-100 p-8">
         <h3 className="text-sm mb-5" style={{ color: BS_BLACK, fontWeight: 600 }}>Personal Information</h3>
         <div className="grid grid-cols-2 gap-5">
-          <div>
-            <label className="block text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 500 }}>Full Name</label>
-            <input
-    type="text"
-    value={name}
-    onChange={(e) => setName(e.target.value)}
-    className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
-    style={{ color: BS_BLACK }}
-  />
-          </div>
-          <div>
-            <label className="block text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 500 }}>Email Address</label>
-            <input
-    type="email"
-    value={email}
-    onChange={(e) => setEmail(e.target.value)}
-    className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
-    style={{ color: BS_BLACK }}
-  />
-          </div>
-          <div>
-            <label className="block text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 500 }}>Company</label>
-            <input
-    type="text"
-    defaultValue={user?.company || ""}
-    className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
-    style={{ color: BS_BLACK }}
-  />
-          </div>
-          <div>
-            <label className="block text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 500 }}>Role</label>
-            <input
-    type="text"
-    value="Customer"
-    readOnly
-    className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm"
-    style={{ color: BS_GRAY }}
-  />
-          </div>
-        </div>
-        <div className="mt-5 flex items-center gap-3">
-          <button
-    onClick={handleSave}
-    className="px-5 py-2.5 rounded-lg text-sm hover:opacity-90 transition-opacity"
-    style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 600 }}
+          {profileFields.map(([label, value]) => <div key={label}>
+              <p className="block text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 500 }}>{label}</p>
+              <div
+    className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm min-h-[42px] flex items-center"
+    style={{ color: label === "Role" ? BS_GRAY : BS_BLACK }}
   >
-            Save Changes
-          </button>
-          {saved && <span className="text-xs" style={{ color: "#22C55E" }}>Changes saved successfully.</span>}
+                {value}
+              </div>
+            </div>)}
+        </div>
+        <div
+    className="mt-5 rounded-lg border px-4 py-3"
+    style={{ backgroundColor: "rgba(242,169,0,0.08)", borderColor: "rgba(242,169,0,0.24)" }}
+  >
+          <p className="text-xs" style={{ color: "#A37200", fontWeight: 600 }}>Notes</p>
+          <p className="text-sm mt-1" style={{ color: BS_GRAY }}>
+            Contact BrandTech for any changes to your name, company, or email address.
+          </p>
         </div>
       </div>
     </div>;

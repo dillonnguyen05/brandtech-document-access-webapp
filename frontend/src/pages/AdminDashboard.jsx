@@ -367,7 +367,12 @@ function AdminDashboard() {
         deniedAt: null,
         deniedBy: null
       });
-      await createAccountApprovalNotification(pendingUser || { id: userId });
+      try {
+        await createAccountApprovalNotification(pendingUser || { id: userId });
+      } catch (notificationError) {
+        console.error(notificationError);
+        setUserApprovalError("User was approved, but the approval notification could not be created. Check Firestore notification rules.");
+      }
     } catch (error) {
       console.error(error);
       setUserApprovalError("Unable to approve user. Check Firestore permissions.");
