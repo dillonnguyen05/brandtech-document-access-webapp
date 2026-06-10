@@ -1,7 +1,10 @@
 import express from "express";
-
+import adminUsersRouter from "./routes/adminUsers.js"
 const app = express();
-
-app.listen(3000, () => {
-  console.log("Server running at http://localhost:3000");
+app.use(express.json());
+app.get('/api/health',(req,res) => {
+    res.json({status: "ok"})
 });
+
+app.use('/api/admin/users',adminUsersRouter);
+app.listen(3000);
