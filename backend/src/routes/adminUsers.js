@@ -1,9 +1,19 @@
-import express from 'express';
+import express from "express";
+
+import verifyFirebaseToken from "../middleware/verifyFirebaseToken.js";
 
 const router = express.Router();
-router.get('/pending',(req,res) =>{
-    res.json({ message: "Admin users route works" });
-    });
+
+router.get("/me", verifyFirebaseToken, (req, res) => {
+  res.status(200).json({
+    uid: req.auth.uid,
+    email: req.auth.email || null
+  });
+});
+
+router.get("/pending", (req, res) => {
+  res.json({ message: "Admin users route works" });
+});
 
 router.post("/:userId/approve", (req, res) => {
   res.json({
