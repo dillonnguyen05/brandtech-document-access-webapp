@@ -1,39 +1,23 @@
 import {
   collection,
-  doc,
   onSnapshot,
   orderBy,
   query,
-  serverTimestamp,
-  setDoc,
   where
 } from "firebase/firestore";
 import { db } from "../firebase/firebaseConfig";
 import { apiRequest } from "./apiClient.js";
 
-export async function createAccessRequest(user, document) {
-  if (!user?.id) {
-    throw new Error("You must be signed in to request access.");
-  }
-
+export async function createAccessRequest(document) {
   if (!document?.id) {
     throw new Error("Select a document before requesting access.");
   }
 
-  const requestId = `${user.id}_${document.id}`;
-
-  await setDoc(doc(db, "accessRequests", requestId), {
-    customerId: user.id,
-    customerName: user.name || "",
-    customerEmail: user.email || "",
-    company: user.company || "",
-    documentId: document.id,
-    documentTitle: document.title || document.fileName || "Untitled Document",
-    documentCategory: document.category || "Uncategorized",
-    status: "pending",
-    createdAt: serverTimestamp(),
-    reviewedAt: null,
-    reviewedBy: null
+  return apiRequest("/api/access-requests", {
+    method: "POST",
+    body: JSON.stringify({
+      documentId: document.id
+    })
   });
 }
 

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useCallback, useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router";
 import {
   collection,
@@ -26,16 +26,22 @@ import {
   Files,
   Clock,
   Camera,
-  UserCircle
+  UserCircle,
+  Pencil,
+  Trash2
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { db } from "../firebase/firebaseConfig";
 import DocumentPreviewModal from "../components/DocumentPreviewModal";
 import logo from "../imports/brandtech.jpg";
 import {
-  listenToDocuments,
+  deleteDocument,
+  downloadDocument,
+  loadAdminDocuments,
+  updateDocument,
   uploadDocument
 } from "../services/documentService.js";
+import { loadAuditLog } from "../services/auditService.js";
 import {
   approveAccessRequest,
   denyAccessRequest,
@@ -134,15 +140,38 @@ function AdminDashboard() {
   const [uploadDone, setUploadDone] = useState(false);
   const [uploadError, setUploadError] = useState("");
   const [documentLoadError, setDocumentLoadError] = useState("");
+  const [documentActionError, setDocumentActionError] = useState("");
   const [requestLoadError, setRequestLoadError] = useState("");
+  const [auditLoadError, setAuditLoadError] = useState("");
   const [activeCustomers, setActiveCustomers] = useState([]);
   const [activeCustomerError, setActiveCustomerError] = useState("");
   const [previewDocument, setPreviewDocument] = useState(null);
+  const [editingDocument, setEditingDocument] = useState(null);
   const fileRef = useRef(null);
   const activeCompanies = Array.from(
     new Set(activeCustomers.map((customer) => customer.company).filter(Boolean))
   ).sort((a, b) => a.localeCompare(b));
   const selectedTargetCustomer = activeCustomers.find((customer) => customer.id === uploadTargetCustomerId);
+  const refreshDocuments = useCallback(async () => {
+    try {
+      const apiDocuments = await loadAdminDocuments();
+      setDocuments(apiDocuments);
+      setDocumentLoadError("");
+    } catch (error) {
+      console.error(error);
+      setDocumentLoadError(error.message || "Unable to load uploaded documents.");
+    }
+  }, []);
+  const refreshAuditLog = useCallback(async () => {
+    try {
+      const apiAuditLog = await loadAuditLog();
+      setAuditLog(apiAuditLog);
+      setAuditLoadError("");
+    } catch (error) {
+      console.error(error);
+      setAuditLoadError(error.message || "Unable to load the audit log.");
+    }
+  }, []);
   const handleLogout = () => {
     logout();
     navigate("/login");
@@ -177,18 +206,44 @@ function AdminDashboard() {
     return unsubscribe;
   }, []);
   useEffect(() => {
-    const unsubscribe = listenToDocuments(
-      (firestoreDocuments) => {
-        setDocuments(firestoreDocuments);
-        setDocumentLoadError("");
-      },
-      (error) => {
-        console.error(error);
-        setDocumentLoadError("Unable to load uploaded documents.");
-      }
-    );
+    let active = true;
 
-    return unsubscribe;
+    loadAdminDocuments()
+      .then((apiDocuments) => {
+        if (!active) return;
+        setDocuments(apiDocuments);
+        setDocumentLoadError("");
+      })
+      .catch((error) => {
+        console.error(error);
+        if (active) {
+          setDocumentLoadError(error.message || "Unable to load uploaded documents.");
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+  useEffect(() => {
+    let active = true;
+
+    loadAuditLog()
+      .then((apiAuditLog) => {
+        if (!active) return;
+        setAuditLog(apiAuditLog);
+        setAuditLoadError("");
+      })
+      .catch((error) => {
+        console.error(error);
+        if (active) {
+          setAuditLoadError(error.message || "Unable to load the audit log.");
+        }
+      });
+
+    return () => {
+      active = false;
+    };
   }, []);
   useEffect(() => {
     const unsubscribe = listenToAccessRequests(
@@ -224,17 +279,7 @@ function AdminDashboard() {
     try {
       setRequestLoadError("");
       await approveAccessRequest(id);
-      const entry = {
-        id: `a${Date.now()}`,
-        customer: req.customerName,
-        company: req.company,
-        document: req.documentTitle,
-        action: "Access Granted",
-        admin: user?.name || "Admin",
-        timestamp: (/* @__PURE__ */ new Date()).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }),
-        requestId: id
-      };
-      setAuditLog((prev) => [entry, ...prev]);
+      await refreshAuditLog();
     } catch (error) {
       console.error(error);
       setRequestLoadError(error.message || "Unable to approve request.");
@@ -246,17 +291,7 @@ function AdminDashboard() {
     try {
       setRequestLoadError("");
       await denyAccessRequest(id);
-      const entry = {
-        id: `a${Date.now()}`,
-        customer: req.customerName,
-        company: req.company,
-        document: req.documentTitle,
-        action: "Access Denied",
-        admin: user?.name || "Admin",
-        timestamp: (/* @__PURE__ */ new Date()).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }),
-        requestId: id
-      };
-      setAuditLog((prev) => [entry, ...prev]);
+      await refreshAuditLog();
     } catch (error) {
       console.error(error);
       setRequestLoadError(error.message || "Unable to deny request.");
@@ -268,17 +303,7 @@ function AdminDashboard() {
     try {
       setRequestLoadError("");
       await grantAccessRequest(requestId);
-      const newEntry = {
-        id: `a${Date.now()}`,
-        customer: auditEntry.customer,
-        company: auditEntry.company,
-        document: auditEntry.document,
-        action: "Access Granted",
-        admin: user?.name || "Admin",
-        timestamp: (/* @__PURE__ */ new Date()).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }),
-        requestId
-      };
-      setAuditLog((prev) => [newEntry, ...prev]);
+      await refreshAuditLog();
     } catch (error) {
       console.error(error);
       setRequestLoadError(error.message || "Unable to grant document access.");
@@ -290,17 +315,7 @@ function AdminDashboard() {
     try {
       setRequestLoadError("");
       await revokeAccessRequest(requestId);
-      const newEntry = {
-        id: `a${Date.now()}`,
-        customer: entry.customer,
-        company: entry.company,
-        document: entry.document,
-        action: "Access Revoked",
-        admin: user?.name || "Admin",
-        timestamp: (/* @__PURE__ */ new Date()).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }),
-        requestId
-      };
-      setAuditLog((prev) => [newEntry, ...prev]);
+      await refreshAuditLog();
     } catch (error) {
       console.error(error);
       setRequestLoadError(error.message || "Unable to revoke document access.");
@@ -352,6 +367,10 @@ function AdminDashboard() {
       setUploadTitle("");
       setUploadFile(null);
       if (fileRef.current) fileRef.current.value = "";
+      await Promise.all([
+        refreshDocuments(),
+        refreshAuditLog()
+      ]);
       setTimeout(() => setUploadDone(false), 3e3);
     } catch (error) {
       console.error(error);
@@ -360,11 +379,61 @@ function AdminDashboard() {
       setUploading(false);
     }
   };
+  const handleDownloadDocument = async (document) => {
+    setDocumentActionError("");
+
+    try {
+      await downloadDocument(document);
+    } catch (error) {
+      console.error(error);
+      setDocumentActionError(error.message || "Unable to download document.");
+    }
+  };
+  const handleUpdateDocument = async (documentId, documentData) => {
+    setDocumentActionError("");
+
+    try {
+      await updateDocument(documentId, documentData);
+      setEditingDocument(null);
+      await Promise.all([
+        refreshDocuments(),
+        refreshAuditLog()
+      ]);
+    } catch (error) {
+      console.error(error);
+      setDocumentActionError(error.message || "Unable to update document.");
+      throw error;
+    }
+  };
+  const handleDeleteDocument = async (document) => {
+    const confirmed = window.confirm(
+      `Delete "${document.title}"? This also removes its requests and notifications.`
+    );
+
+    if (!confirmed) return;
+
+    setDocumentActionError("");
+
+    try {
+      await deleteDocument(document.id);
+      if (previewDocument?.id === document.id) {
+        setPreviewDocument(null);
+      }
+      await Promise.all([
+        refreshDocuments(),
+        refreshAuditLog()
+      ]);
+    } catch (error) {
+      console.error(error);
+      setDocumentActionError(error.message || "Unable to delete document.");
+    }
+  };
   const approveUser = async (userId) => {
     setUpdatingUserId(userId);
     setUserApprovalError("");
     try {
       await approveCustomer(userId);
+      await refreshAuditLog();
     } catch (error) {
       console.error(error);
       setUserApprovalError(error.message || "Unable to approve user.");
@@ -377,6 +446,7 @@ function AdminDashboard() {
     setUserApprovalError("");
     try {
       await denyCustomer(userId);
+      await refreshAuditLog();
     } catch (error) {
       console.error(error);
       setUserApprovalError(error.message || "Unable to deny user.");
@@ -668,7 +738,11 @@ function AdminDashboard() {
     uploadDone={uploadDone}
     uploadError={uploadError}
     documentLoadError={documentLoadError}
+    documentActionError={documentActionError}
     onPreviewDocument={setPreviewDocument}
+    onDownloadDocument={handleDownloadDocument}
+    onEditDocument={setEditingDocument}
+    onDeleteDocument={handleDeleteDocument}
     fileRef={fileRef}
     onUpload={handleUpload}
   />}
@@ -680,12 +754,20 @@ function AdminDashboard() {
     onApprove={approveUser}
     onDeny={denyUser}
   />}
-          {section === "audit" && <AuditContent auditLog={auditLog} onRevoke={revokeAccess} onGrant={grantAccess} requests={requests} />}
+          {section === "audit" && <AuditContent auditLog={auditLog} error={auditLoadError} onRevoke={revokeAccess} onGrant={grantAccess} requests={requests} />}
           {section === "settings" && <SettingsContent user={user} />}
           {section === "profile" && <AdminProfileContent user={user} profilePic={profilePic} setProfilePic={setProfilePic} />}
         </main>
       </div>
       <DocumentPreviewModal document={previewDocument} onClose={() => setPreviewDocument(null)} />
+      {editingDocument && <DocumentEditModal
+    key={editingDocument.id}
+    document={editingDocument}
+    activeCustomers={activeCustomers}
+    activeCompanies={activeCompanies}
+    onClose={() => setEditingDocument(null)}
+    onSave={handleUpdateDocument}
+  />}
     </div>;
 }
 function NavButton({
@@ -803,7 +885,11 @@ function DocumentsContent({
   uploadDone,
   uploadError,
   documentLoadError,
+  documentActionError,
   onPreviewDocument,
+  onDownloadDocument,
+  onEditDocument,
+  onDeleteDocument,
   fileRef,
   onUpload
 }) {
@@ -973,6 +1059,9 @@ function DocumentsContent({
         {documentLoadError && <div className="mx-5 mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
             {documentLoadError}
           </div>}
+        {documentActionError && <div className="mx-5 mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
+            {documentActionError}
+          </div>}
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -1005,17 +1094,35 @@ function DocumentsContent({
 	  >
 	                        <Eye size={11} /> Preview
 	                      </button>
-	                      {doc.downloadURL && <a
-	    href={doc.downloadURL}
-	    target="_blank"
-	    rel="noreferrer"
-	    download={doc.fileName || doc.title}
-	    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
-	    style={{ borderColor: "#D1D5DB", color: BS_GRAY }}
-	  >
-	                        <Download size={11} /> Download
-	                      </a>}
-	                    </div>
+		                      <button
+		    type="button"
+		    onClick={() => onDownloadDocument(doc)}
+		    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
+		    style={{ borderColor: "#D1D5DB", color: BS_GRAY }}
+		  >
+		                        <Download size={11} /> Download
+		                      </button>
+		                      <button
+		    type="button"
+		    onClick={() => onEditDocument(doc)}
+		    className="h-7 w-7 flex items-center justify-center rounded-lg border transition-opacity hover:opacity-80"
+		    style={{ borderColor: "#D1D5DB", color: BS_GRAY }}
+		    aria-label={`Edit ${doc.title}`}
+		    title="Edit document"
+		  >
+		                        <Pencil size={12} />
+		                      </button>
+		                      <button
+		    type="button"
+		    onClick={() => onDeleteDocument(doc)}
+		    className="h-7 w-7 flex items-center justify-center rounded-lg border transition-opacity hover:opacity-80"
+		    style={{ borderColor: BS_MAROON, color: BS_MAROON }}
+		    aria-label={`Delete ${doc.title}`}
+		    title="Delete document"
+		  >
+		                        <Trash2 size={12} />
+		                      </button>
+		                    </div>
 	                  </td>
 	                </tr>)}
 	            </tbody>
@@ -1171,12 +1278,15 @@ function UserApprovalsContent({
       </div>
     </div>;
 }
-function AuditContent({ auditLog, onRevoke, onGrant, requests }) {
+function AuditContent({ auditLog, error, onRevoke, onGrant, requests }) {
   return <div className="bg-white rounded-xl border border-gray-100">
       <div className="px-5 py-4 border-b border-gray-100">
         <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Audit Log</h3>
         <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>Complete record of all document access actions</p>
       </div>
+      {error && <div className="mx-5 mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
+          {error}
+        </div>}
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
@@ -1226,6 +1336,130 @@ function AuditContent({ auditLog, onRevoke, onGrant, requests }) {
           </tbody>
         </table>
       </div>
+    </div>;
+}
+function DocumentEditModal({
+  document,
+  activeCustomers,
+  activeCompanies,
+  onClose,
+  onSave
+}) {
+  const [form, setForm] = useState({
+    title: document.title || "",
+    type: document.type || "Other",
+    category: document.category || "Other",
+    targetType: document.targetType || "all",
+    targetCompany: document.targetCompany || "",
+    targetCustomerId: document.targetCustomerId || ""
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const update = (field) => (event) => {
+    setForm((previous) => ({
+      ...previous,
+      [field]: event.target.value
+    }));
+  };
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+
+    try {
+      await onSave(document.id, form);
+    } catch (saveError) {
+      setError(saveError.message || "Unable to update document.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+      <form onSubmit={handleSubmit} className="w-full max-w-lg rounded-lg bg-white border border-gray-100 shadow-xl">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <div>
+            <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Edit Document</h3>
+            <p className="text-xs mt-0.5 truncate max-w-sm" style={{ color: BS_GRAY }}>{document.fileName}</p>
+          </div>
+          <button
+    type="button"
+    onClick={onClose}
+    className="h-8 w-8 flex items-center justify-center rounded-lg hover:bg-gray-100"
+    aria-label="Close edit document"
+  >
+            <XCircle size={16} style={{ color: BS_GRAY }} />
+          </button>
+        </div>
+        <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="sm:col-span-2">
+            <label className="block text-xs mb-1.5" style={{ color: BS_GRAY }}>Title</label>
+            <input
+    value={form.title}
+    onChange={update("title")}
+    required
+    className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
+  />
+          </div>
+          <div>
+            <label className="block text-xs mb-1.5" style={{ color: BS_GRAY }}>Type</label>
+            <select value={form.type} onChange={update("type")} className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm">
+              {["PDF", "Word", "Excel", "PowerPoint", "Other"].map((type) => <option key={type}>{type}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs mb-1.5" style={{ color: BS_GRAY }}>Category</label>
+            <select value={form.category} onChange={update("category")} className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm">
+              {["Safety", "Technical", "Compliance", "Operations", "Legal", "Other"].map((category) => <option key={category}>{category}</option>)}
+            </select>
+          </div>
+          <div className="sm:col-span-2">
+            <label className="block text-xs mb-1.5" style={{ color: BS_GRAY }}>Target Audience</label>
+            <select
+    value={form.targetType}
+    onChange={(event) => setForm((previous) => ({
+      ...previous,
+      targetType: event.target.value,
+      targetCompany: "",
+      targetCustomerId: ""
+    }))}
+    className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm"
+  >
+              <option value="all">All active customers</option>
+              <option value="company">Specific company</option>
+              <option value="customer">Specific customer</option>
+            </select>
+          </div>
+          {form.targetType === "company" && <div className="sm:col-span-2">
+              <label className="block text-xs mb-1.5" style={{ color: BS_GRAY }}>Company</label>
+              <select value={form.targetCompany} onChange={update("targetCompany")} required className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm">
+                <option value="">Select company</option>
+                {activeCompanies.map((company) => <option key={company} value={company}>{company}</option>)}
+              </select>
+            </div>}
+          {form.targetType === "customer" && <div className="sm:col-span-2">
+              <label className="block text-xs mb-1.5" style={{ color: BS_GRAY }}>Customer</label>
+              <select value={form.targetCustomerId} onChange={update("targetCustomerId")} required className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm">
+                <option value="">Select customer</option>
+                {activeCustomers.map((customer) => <option key={customer.id} value={customer.id}>
+                    {customer.name || customer.email} {customer.company ? `— ${customer.company}` : ""}
+                  </option>)}
+              </select>
+            </div>}
+          {error && <div className="sm:col-span-2 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
+              {error}
+            </div>}
+        </div>
+        <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-100">
+          <button type="button" onClick={onClose} className="px-4 py-2 rounded-lg border border-gray-200 text-sm" style={{ color: BS_GRAY }}>
+            Cancel
+          </button>
+          <button type="submit" disabled={saving} className="px-4 py-2 rounded-lg text-sm disabled:opacity-50" style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 600 }}>
+            {saving ? "Saving..." : "Save Changes"}
+          </button>
+        </div>
+      </form>
     </div>;
 }
 function SettingsContent({ user }) {

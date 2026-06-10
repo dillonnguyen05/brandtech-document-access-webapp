@@ -1,4 +1,9 @@
+import { useEffect, useState } from "react";
 import { Download, FileText, X } from "lucide-react";
+import {
+  downloadDocument,
+  getDocumentUrl
+} from "../services/documentService.js";
 
 const BS_BLACK = "#101820";
 const BS_GOLD = "#F2A900";
@@ -20,20 +25,54 @@ function isOfficeDocument(document) {
   return [".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"].some((ext) => name.endsWith(ext));
 }
 
-function getPreviewUrl(document) {
-  if (!document?.downloadURL) return "";
+function DocumentPreviewContent({ document, onClose }) {
+  const previewable = isPdf(document) || isImage(document);
+  const [previewUrl, setPreviewUrl] = useState("");
+  const [previewError, setPreviewError] = useState("");
+  const [loadingPreview, setLoadingPreview] = useState(previewable);
+  const [downloading, setDownloading] = useState(false);
 
-  if (isPdf(document) || isImage(document)) {
-    return document.downloadURL;
-  }
+  useEffect(() => {
+    let active = true;
 
-  return "";
-}
+    if (!previewable) {
+      return () => {
+        active = false;
+      };
+    }
 
-function DocumentPreviewModal({ document, onClose }) {
-  if (!document) return null;
+    getDocumentUrl(document.id, "inline")
+      .then((url) => {
+        if (active) setPreviewUrl(url);
+      })
+      .catch((error) => {
+        console.error(error);
+        if (active) {
+          setPreviewError(error.message || "Unable to open this document.");
+        }
+      })
+      .finally(() => {
+        if (active) setLoadingPreview(false);
+      });
 
-  const previewUrl = getPreviewUrl(document);
+    return () => {
+      active = false;
+    };
+  }, [document.id, previewable]);
+
+  const handleDownload = async () => {
+    setDownloading(true);
+    setPreviewError("");
+
+    try {
+      await downloadDocument(document);
+    } catch (error) {
+      console.error(error);
+      setPreviewError(error.message || "Unable to download this document.");
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
       <div className="w-full max-w-5xl max-h-[90vh] overflow-hidden rounded-xl bg-white shadow-xl border border-gray-100">
@@ -60,19 +99,23 @@ function DocumentPreviewModal({ document, onClose }) {
         </div>
 
         <div className="h-[70vh] bg-gray-50">
-          {previewUrl && isImage(document) && <img
+          {loadingPreview && <div className="h-full flex items-center justify-center text-sm" style={{ color: BS_GRAY }}>
+              Loading secure preview...
+            </div>}
+
+          {!loadingPreview && previewUrl && isImage(document) && <img
     src={previewUrl}
     alt={document.title || document.fileName || "Document preview"}
     className="h-full w-full object-contain"
   />}
 
-          {previewUrl && !isImage(document) && <iframe
+          {!loadingPreview && previewUrl && !isImage(document) && <iframe
     title={document.title || document.fileName || "Document preview"}
     src={previewUrl}
     className="h-full w-full border-0 bg-white"
   />}
 
-          {!previewUrl && <div className="h-full flex flex-col items-center justify-center text-center px-6">
+          {!loadingPreview && !previewUrl && <div className="h-full flex flex-col items-center justify-center text-center px-6">
               <div className="h-14 w-14 rounded-xl flex items-center justify-center mb-4" style={{ backgroundColor: "#F3F4F6" }}>
                 <FileText size={24} style={{ color: BS_GRAY }} />
               </div>
@@ -80,27 +123,36 @@ function DocumentPreviewModal({ document, onClose }) {
                 {isOfficeDocument(document) ? "Office document preview is not available in-app." : "Preview is not available for this file type."}
               </p>
               <p className="text-xs mt-1 max-w-sm" style={{ color: BS_GRAY }}>
-                {isOfficeDocument(document)
+                {previewError || (isOfficeDocument(document)
       ? "Open or download the file to view it in Word, Excel, PowerPoint, or your browser's default viewer."
-      : "Download or open the document to view it with the appropriate desktop application."}
+      : "Download or open the document to view it with the appropriate desktop application.")}
               </p>
-              {document.downloadURL && <div className="mt-5 flex items-center gap-2">
-                  <a
-      href={document.downloadURL}
-      target="_blank"
-      rel="noreferrer"
-      download={document.fileName || document.title}
+              <div className="mt-5 flex items-center gap-2">
+                  <button
+      type="button"
+      onClick={handleDownload}
+      disabled={downloading}
       className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-lg text-sm transition-opacity hover:opacity-85"
       style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 600 }}
     >
                     <Download size={13} />
-                    Download
-                  </a>
-                </div>}
+                    {downloading ? "Preparing..." : "Download"}
+                  </button>
+                </div>
             </div>}
         </div>
       </div>
     </div>;
+}
+
+function DocumentPreviewModal({ document, onClose }) {
+  if (!document) return null;
+
+  return <DocumentPreviewContent
+    key={document.id}
+    document={document}
+    onClose={onClose}
+  />;
 }
 
 export default DocumentPreviewModal;

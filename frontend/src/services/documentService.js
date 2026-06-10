@@ -1,13 +1,52 @@
-import {
-  collection,
-  onSnapshot,
-  orderBy,
-  query
-} from "firebase/firestore";
-import { db } from "../firebase/firebaseConfig";
-import { uploadApiFile } from "./apiClient.js";
+import { apiRequest, uploadApiFile } from "./apiClient.js";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
+
+function formatFileSize(bytes) {
+  if (!bytes) return "—";
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatUploadDate(value) {
+  if (!value) return "—";
+
+  const date = value instanceof Date ? value : new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric"
+  });
+}
+
+function formatTargetLabel(data) {
+  if (data.targetType === "customer") {
+    return data.targetCustomerName || data.targetCustomer || "Specific customer";
+  }
+
+  if (data.targetType === "company") {
+    return data.targetCompany || data.targetCustomer || "Specific company";
+  }
+
+  return data.targetCustomer || "All Customers";
+}
+
+function formatDocument(document) {
+  return {
+    ...document,
+    title: document.title || document.fileName || "Untitled Document",
+    type: document.type || document.fileType || "File",
+    category: document.category || "Uncategorized",
+    uploadedDate: formatUploadDate(document.createdAt),
+    size: formatFileSize(document.fileSize),
+    uploadedBy: document.uploadedByName || document.uploadedByEmail || "Admin",
+    targetLabel: formatTargetLabel(document)
+  };
+}
 
 export async function uploadDocument(file, documentData, onProgress) {
   if (!file) {
@@ -25,11 +64,8 @@ export async function uploadDocument(file, documentData, onProgress) {
   formData.append("type", documentData.type || "Other");
   formData.append("category", documentData.category || "Uncategorized");
   formData.append("targetType", documentData.targetType || "all");
-  formData.append("targetCustomer", documentData.targetCustomer || "");
   formData.append("targetCompany", documentData.targetCompany || "");
   formData.append("targetCustomerId", documentData.targetCustomerId || "");
-  formData.append("targetCustomerName", documentData.targetCustomerName || "");
-  formData.append("targetCustomerEmail", documentData.targetCustomerEmail || "");
 
   const result = await uploadApiFile(
     "/api/admin/documents",
@@ -37,67 +73,57 @@ export async function uploadDocument(file, documentData, onProgress) {
     onProgress
   );
 
-  return result.document;
+  return formatDocument(result.document);
 }
 
-function formatFileSize(bytes) {
-  if (!bytes) return "—";
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+export async function loadAdminDocuments() {
+  const result = await apiRequest("/api/admin/documents");
+  return result.documents.map(formatDocument);
 }
 
-function formatUploadDate(value) {
-  if (!value) return "—";
-
-  if (typeof value.toDate === "function") {
-    return value.toDate().toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric"
-    });
-  }
-
-  return String(value);
+export async function loadCustomerDocuments() {
+  const result = await apiRequest("/api/documents");
+  return result.documents.map(formatDocument);
 }
 
-function formatTargetLabel(data) {
-  if (data.targetType === "customer") {
-    return data.targetCustomerName || data.targetCustomer || "Specific customer";
-  }
-
-  if (data.targetType === "company") {
-    return data.targetCompany || data.targetCustomer || "Specific company";
-  }
-
-  return data.targetCustomer || "All Customers";
-}
-
-export function listenToDocuments(onDocuments, onError) {
-  const documentsQuery = query(
-    collection(db, "documents"),
-    orderBy("createdAt", "desc")
+export async function updateDocument(documentId, documentData) {
+  const result = await apiRequest(
+    `/api/admin/documents/${encodeURIComponent(documentId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(documentData)
+    }
   );
 
-  return onSnapshot(
-    documentsQuery,
-    (snapshot) => {
-      const documents = snapshot.docs.map((documentSnapshot) => {
-        const data = documentSnapshot.data();
+  return formatDocument(result.document);
+}
 
-        return {
-          id: documentSnapshot.id,
-          ...data,
-          title: data.title || data.fileName || "Untitled Document",
-          type: data.type || data.fileType || "File",
-          category: data.category || "Uncategorized",
-          uploadedDate: formatUploadDate(data.createdAt),
-          size: formatFileSize(data.fileSize),
-          uploadedBy: data.uploadedByName || data.uploadedByEmail || "Admin",
-          targetLabel: formatTargetLabel(data)
-        };
-      });
-
-      onDocuments(documents);
-    },
-    onError
+export function deleteDocument(documentId) {
+  return apiRequest(
+    `/api/admin/documents/${encodeURIComponent(documentId)}`,
+    {
+      method: "DELETE"
+    }
   );
+}
+
+export async function getDocumentUrl(documentId, disposition = "attachment") {
+  const query = new URLSearchParams({ disposition });
+  const result = await apiRequest(
+    `/api/documents/${encodeURIComponent(documentId)}/download?${query}`
+  );
+
+  return result.url;
+}
+
+export async function downloadDocument(document) {
+  const url = await getDocumentUrl(document.id, "attachment");
+  const link = window.document.createElement("a");
+
+  link.href = url;
+  link.download = document.fileName || document.title || "document";
+  link.rel = "noreferrer";
+  window.document.body.appendChild(link);
+  link.click();
+  link.remove();
 }

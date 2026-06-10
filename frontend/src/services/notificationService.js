@@ -1,13 +1,11 @@
 import {
   collection,
-  doc,
   onSnapshot,
   query,
-  serverTimestamp,
-  where,
-  writeBatch
+  where
 } from "firebase/firestore";
 import { db } from "../firebase/firebaseConfig";
+import { apiRequest } from "./apiClient.js";
 
 function formatNotificationDate(value) {
   if (!value) return "Just now";
@@ -62,14 +60,10 @@ export async function markNotificationsRead(notifications) {
   const unreadNotifications = notifications.filter((notification) => !notification.read);
   if (unreadNotifications.length === 0) return;
 
-  const batch = writeBatch(db);
-
-  unreadNotifications.forEach((notification) => {
-    batch.update(doc(db, "notifications", notification.id), {
-      read: true,
-      readAt: serverTimestamp()
-    });
+  await apiRequest("/api/notifications/read", {
+    method: "PATCH",
+    body: JSON.stringify({
+      notificationIds: unreadNotifications.map((notification) => notification.id)
+    })
   });
-
-  await batch.commit();
 }

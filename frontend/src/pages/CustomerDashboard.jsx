@@ -19,7 +19,10 @@ import {
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import DocumentPreviewModal from "../components/DocumentPreviewModal";
-import { listenToDocuments } from "../services/documentService.js";
+import {
+  downloadDocument,
+  loadCustomerDocuments
+} from "../services/documentService.js";
 import {
   createAccessRequest,
   listenToCustomerRequests
@@ -97,18 +100,24 @@ function CustomerDashboard() {
   const availableDocs = customerDocuments.filter((doc) => !activeRequestDocIds.has(doc.id));
   const unreadCount = notifications.filter((n) => !n.read).length;
   useEffect(() => {
-    const unsubscribe = listenToDocuments(
-      (firestoreDocuments) => {
-        setDocuments(firestoreDocuments);
-        setDocumentLoadError("");
-      },
-      (error) => {
-        console.error(error);
-        setDocumentLoadError("Unable to load documents.");
-      }
-    );
+    let active = true;
 
-    return unsubscribe;
+    loadCustomerDocuments()
+      .then((apiDocuments) => {
+        if (!active) return;
+        setDocuments(apiDocuments);
+        setDocumentLoadError("");
+      })
+      .catch((error) => {
+        console.error(error);
+        if (active) {
+          setDocumentLoadError(error.message || "Unable to load documents.");
+        }
+      });
+
+    return () => {
+      active = false;
+    };
   }, []);
   useEffect(() => {
     if (!user?.id) return undefined;
@@ -152,7 +161,7 @@ function CustomerDashboard() {
     setRequestActionError("");
 
     try {
-      await createAccessRequest(user, document);
+      await createAccessRequest(document);
     } catch (error) {
       console.error(error);
       setRequestActionError(error.message || "Unable to request document access.");
@@ -165,6 +174,16 @@ function CustomerDashboard() {
     } catch (error) {
       console.error(error);
       setNotificationLoadError("Unable to mark notifications as read.");
+    }
+  };
+  const handleDownloadDocument = async (document) => {
+    setDocumentLoadError("");
+
+    try {
+      await downloadDocument(document);
+    } catch (error) {
+      console.error(error);
+      setDocumentLoadError(error.message || "Unable to download document.");
     }
   };
   return <div className="flex h-screen w-full overflow-hidden" style={{ backgroundColor: BS_LIGHT }}>
@@ -323,12 +342,14 @@ function CustomerDashboard() {
     notifications={notifications}
     onRequestAccess={requestAccess}
     onPreviewDocument={setPreviewDocument}
+    onDownloadDocument={handleDownloadDocument}
     onNavigate={setSection}
   />}
           {section === "documents" && <DocumentsSection
     approvedDocs={approvedDocs}
     documentLoadError={documentLoadError}
     onPreviewDocument={setPreviewDocument}
+    onDownloadDocument={handleDownloadDocument}
   />}
           {section === "requests" && <RequestsSection
     myRequests={myRequests}
@@ -393,6 +414,7 @@ function DashboardHome({
   notifications,
   onRequestAccess,
   onPreviewDocument,
+  onDownloadDocument,
   onNavigate
 }) {
   const pendingCount = myRequests.filter((r) => r.status === "pending").length;
@@ -474,16 +496,14 @@ function DashboardHome({
 	  >
 	                  <ExternalLink size={11} /> Open
 	                </button>
-	                {doc.downloadURL && <a
-    href={doc.downloadURL}
-    target="_blank"
-    rel="noreferrer"
-    download={doc.fileName || doc.title}
-    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
-    style={{ borderColor: "#D1D5DB", color: BS_GRAY }}
-  >
-	                  <Download size={11} /> Download
-	                </a>}
+		                <button
+	    type="button"
+	    onClick={() => onDownloadDocument(doc)}
+	    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
+	    style={{ borderColor: "#D1D5DB", color: BS_GRAY }}
+	  >
+		                  <Download size={11} /> Download
+		                </button>
 	              </div>
 	            </div>)}
         </div> : <div className="bg-white rounded-xl border border-gray-100 p-8 text-center">
@@ -529,7 +549,8 @@ function DashboardHome({
 function DocumentsSection({
   approvedDocs,
   documentLoadError,
-  onPreviewDocument
+  onPreviewDocument,
+  onDownloadDocument
 }) {
   return <div className="bg-white rounded-xl border border-gray-100">
       <div className="px-5 py-4 border-b border-gray-100">
@@ -583,16 +604,14 @@ function DocumentsSection({
 	  >
 	                        <ExternalLink size={11} /> Open
 	                      </button>
-	                      {doc.downloadURL && <a
-	    href={doc.downloadURL}
-	    target="_blank"
-	    rel="noreferrer"
-	    download={doc.fileName || doc.title}
-	    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
-	    style={{ borderColor: "#D1D5DB", color: BS_GRAY }}
-	  >
-	                        <Download size={11} /> Download
-	                      </a>}
+		                      <button
+		    type="button"
+		    onClick={() => onDownloadDocument(doc)}
+		    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
+		    style={{ borderColor: "#D1D5DB", color: BS_GRAY }}
+		  >
+		                        <Download size={11} /> Download
+		                      </button>
 	                    </div>
 	                  </td>
                 </tr>)}

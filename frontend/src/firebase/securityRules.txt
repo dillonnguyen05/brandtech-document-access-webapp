@@ -31,71 +31,42 @@ service cloud.firestore {
       allow read: if signedIn()
         && (request.auth.uid == userId || isActiveAdmin());
 
-      allow update: if isActiveAdmin()
-        || (
-          signedIn()
-          && request.auth.uid == userId
-          && request.resource.data.diff(resource.data).changedKeys().hasOnly([
-            "emailVerified",
-            "emailVerifiedAt"
-          ])
-        );
+      allow update: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          "emailVerified",
+          "emailVerifiedAt"
+        ]);
 
-      allow delete: if isActiveAdmin();
+      allow delete: if false;
     }
 
     match /documents/{documentId} {
-      allow read: if isActiveAdmin() || isActiveCustomer();
-      allow write: if isActiveAdmin();
+      allow read, write: if false;
     }
 
     match /accessRequests/{requestId} {
-      allow create: if isActiveCustomer()
-        && request.resource.data.customerId == request.auth.uid
-        && request.resource.data.status == "pending";
-
       allow read: if isActiveAdmin()
         || (
           isActiveCustomer()
           && resource.data.customerId == request.auth.uid
         );
 
-      allow update: if isActiveAdmin()
-        || (
-          isActiveCustomer()
-          && resource.data.customerId == request.auth.uid
-          && resource.data.status == "denied"
-          && request.resource.data.customerId == request.auth.uid
-          && request.resource.data.status == "pending"
-        );
-
-      allow delete: if isActiveAdmin();
+      allow create, update, delete: if false;
     }
 
     match /auditLog/{auditId} {
-      allow read, write: if isActiveAdmin();
+      allow read, write: if false;
     }
 
     match /notifications/{notificationId} {
-      allow create: if isActiveAdmin();
-
       allow read: if isActiveAdmin()
         || (
           isActiveCustomer()
           && resource.data.recipientId == request.auth.uid
         );
 
-      allow update: if isActiveAdmin()
-        || (
-          isActiveCustomer()
-          && resource.data.recipientId == request.auth.uid
-          && request.resource.data.diff(resource.data).changedKeys().hasOnly([
-            "read",
-            "readAt"
-          ])
-        );
-
-      allow delete: if isActiveAdmin();
+      allow create, update, delete: if false;
     }
   }
 }
