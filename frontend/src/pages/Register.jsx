@@ -7,23 +7,23 @@ const BS_BLACK = "#101820";
 const BS_GOLD = "#F2A900";
 const BS_GRAY = "#565A5C";
 const COUNTRY_CODES = [
-  { label: "🇺🇸 +1", value: "+1", name: "United States" },
-  { label: "🇨🇦 +1", value: "+1", name: "Canada" },
-  { label: "🇲🇽 +52", value: "+52", name: "Mexico" },
-  { label: "🇬🇧 +44", value: "+44", name: "United Kingdom" },
-  { label: "🇮🇳 +91", value: "+91", name: "India" },
-  { label: "🇵🇭 +63", value: "+63", name: "Philippines" },
-  { label: "🇧🇷 +55", value: "+55", name: "Brazil" },
-  { label: "🇩🇪 +49", value: "+49", name: "Germany" },
-  { label: "🇫🇷 +33", value: "+33", name: "France" },
-  { label: "🇦🇺 +61", value: "+61", name: "Australia" }
+  { id: "US", label: "🇺🇸 +1", dialCode: "+1", name: "United States", minLength: 10, maxLength: 10 },
+  { id: "CA", label: "🇨🇦 +1", dialCode: "+1", name: "Canada", minLength: 10, maxLength: 10 },
+  { id: "MX", label: "🇲🇽 +52", dialCode: "+52", name: "Mexico", minLength: 10, maxLength: 10 },
+  { id: "GB", label: "🇬🇧 +44", dialCode: "+44", name: "United Kingdom", minLength: 10, maxLength: 10 },
+  { id: "IN", label: "🇮🇳 +91", dialCode: "+91", name: "India", minLength: 10, maxLength: 10 },
+  { id: "PH", label: "🇵🇭 +63", dialCode: "+63", name: "Philippines", minLength: 10, maxLength: 10 },
+  { id: "BR", label: "🇧🇷 +55", dialCode: "+55", name: "Brazil", minLength: 10, maxLength: 11 },
+  { id: "DE", label: "🇩🇪 +49", dialCode: "+49", name: "Germany", minLength: 5, maxLength: 11 },
+  { id: "FR", label: "🇫🇷 +33", dialCode: "+33", name: "France", minLength: 9, maxLength: 9 },
+  { id: "AU", label: "🇦🇺 +61", dialCode: "+61", name: "Australia", minLength: 9, maxLength: 9 }
 ];
 function Register() {
   const [form, setForm] = useState({
     fullName: "",
     company: "",
     email: "",
-    phoneCountryCode: "+1",
+    phoneCountry: "US",
     phone: "",
     password: "",
     confirmPassword: ""
@@ -36,9 +36,26 @@ function Register() {
   const [loading, setLoading] = useState(false);
   const { register } = useAuth();
   const navigate = useNavigate();
+  const selectedCountry = COUNTRY_CODES.find(
+    (country) => country.id === form.phoneCountry
+  ) || COUNTRY_CODES[0];
   const update = (field) => (e) => setForm((prev) => ({ ...prev, [field]: e.target.value }));
+  const updatePhoneCountry = (e) => {
+    const nextCountry = COUNTRY_CODES.find(
+      (country) => country.id === e.target.value
+    ) || COUNTRY_CODES[0];
+
+    setForm((prev) => ({
+      ...prev,
+      phoneCountry: nextCountry.id,
+      phone: prev.phone.slice(0, nextCountry.maxLength)
+    }));
+  };
   const updatePhone = (e) => {
-    const digitsOnly = e.target.value.replace(/\D/g, "");
+    const digitsOnly = e.target.value
+      .replace(/\D/g, "")
+      .slice(0, selectedCountry.maxLength);
+
     setForm((prev) => ({ ...prev, phone: digitsOnly }));
   };
   const handleSubmit = async (e) => {
@@ -47,6 +64,19 @@ function Register() {
     setSuccess("");
     if (!form.phone || /\D/.test(form.phone)) {
       setError("Phone number must contain numbers only with no spaces or dashes.");
+      return;
+    }
+    if (
+      form.phone.length < selectedCountry.minLength
+      || form.phone.length > selectedCountry.maxLength
+    ) {
+      const requiredLength = selectedCountry.minLength === selectedCountry.maxLength
+        ? `${selectedCountry.minLength} digits`
+        : `${selectedCountry.minLength}-${selectedCountry.maxLength} digits`;
+
+      setError(
+        `Enter ${requiredLength} for ${selectedCountry.name}.`
+      );
       return;
     }
     if (form.password !== form.confirmPassword) {
@@ -65,7 +95,7 @@ function Register() {
     await new Promise((r) => setTimeout(r, 450));
     const result = await register({
       ...form,
-      phone: `${form.phoneCountryCode}${form.phone}`
+      phone: `${selectedCountry.dialCode}${form.phone}`
     });
     setLoading(false);
     if (result.success) {
@@ -216,13 +246,13 @@ function Register() {
                 </label>
                 <div className="flex gap-2">
                   <select
-    value={form.phoneCountryCode}
-    onChange={update("phoneCountryCode")}
+    value={form.phoneCountry}
+    onChange={updatePhoneCountry}
     aria-label="Country code"
     className="w-[116px] px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900] focus:border-transparent transition-all"
     style={{ color: BS_BLACK }}
   >
-                    {COUNTRY_CODES.map((country) => <option key={`${country.name}-${country.value}`} value={country.value}>
+                    {COUNTRY_CODES.map((country) => <option key={country.id} value={country.id}>
                         {country.label}
                       </option>)}
                   </select>
@@ -234,15 +264,24 @@ function Register() {
       value={form.phone}
       onChange={updatePhone}
       placeholder="5550000000"
+      minLength={selectedCountry.minLength}
+      maxLength={selectedCountry.maxLength}
       required
       className={inputClass}
       style={{ color: BS_BLACK }}
     />
                   </div>
                 </div>
-                <p className="mt-1.5 text-xs" style={{ color: "#8B949E" }}>
-                  Use numbers only. No spaces or dashes.
-                </p>
+                <div className="mt-1.5 flex items-center justify-between gap-3 text-xs" style={{ color: "#8B949E" }}>
+                  <p>
+                    Numbers only. Enter {selectedCountry.minLength === selectedCountry.maxLength
+                      ? `${selectedCountry.maxLength} digits`
+                      : `${selectedCountry.minLength}-${selectedCountry.maxLength} digits`}.
+                  </p>
+                  <span className="flex-shrink-0" aria-live="polite">
+                    {form.phone.length}/{selectedCountry.maxLength}
+                  </span>
+                </div>
               </div>
 
               <div>
