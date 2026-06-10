@@ -75,6 +75,18 @@ app.use((error, req, res, next) => {
     return next(error);
   }
 
+  if (error.code === "LIMIT_FILE_SIZE") {
+    return res.status(413).json({
+      error: "File must be 50 MB or smaller."
+    });
+  }
+
+  if (error.name === "MulterError") {
+    return res.status(400).json({
+      error: error.message || "Invalid file upload."
+    });
+  }
+
   return res.status(error.status || 500).json({
     error: error.message || "Internal server error."
   });
