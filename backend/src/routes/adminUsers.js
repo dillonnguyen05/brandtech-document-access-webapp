@@ -1,11 +1,8 @@
 import express from "express";
 
-import requireAdmin from "../middleware/requireAdmin.js";
-import verifyFirebaseToken from "../middleware/verifyFirebaseToken.js";
-
 const router = express.Router();
 
-router.get("/me", verifyFirebaseToken, requireAdmin, (req, res) => {
+router.get("/me", (req, res) => {
   res.status(200).json({
     uid: req.auth.uid,
     email: req.auth.email || null,

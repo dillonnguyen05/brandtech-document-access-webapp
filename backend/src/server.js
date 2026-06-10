@@ -2,6 +2,8 @@ import "dotenv/config";
 import cors from "cors";
 import express from "express";
 
+import requireAdmin from "./middleware/requireAdmin.js";
+import verifyFirebaseToken from "./middleware/verifyFirebaseToken.js";
 import accessRequestsRouter from "./routes/accessRequests.js";
 import adminUsersRouter from "./routes/adminUsers.js";
 import documentsRouter from "./routes/documents.js";
@@ -25,9 +27,24 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-app.use("/api/admin/users", adminUsersRouter);
-app.use("/api/admin/access-requests", accessRequestsRouter);
-app.use("/api/admin/documents", documentsRouter);
+app.use(
+  "/api/admin/users",
+  verifyFirebaseToken,
+  requireAdmin,
+  adminUsersRouter
+);
+app.use(
+  "/api/admin/access-requests",
+  verifyFirebaseToken,
+  requireAdmin,
+  accessRequestsRouter
+);
+app.use(
+  "/api/admin/documents",
+  verifyFirebaseToken,
+  requireAdmin,
+  documentsRouter
+);
 
 app.use((req, res) => {
   res.status(404).json({
