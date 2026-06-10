@@ -5,6 +5,7 @@ import {
   where
 } from "firebase/firestore";
 import { db } from "../firebase/firebaseConfig";
+import { apiRequest } from "./apiClient.js";
 
 export function listenToActiveCustomers(onCustomers, onError) {
   const customersQuery = query(
@@ -27,4 +28,21 @@ export function listenToActiveCustomers(onCustomers, onError) {
     },
     onError
   );
+}
+
+function reviewCustomer(userId, action) {
+  return apiRequest(
+    `/api/admin/users/${encodeURIComponent(userId)}/${action}`,
+    {
+      method: "POST"
+    }
+  );
+}
+
+export function approveCustomer(userId) {
+  return reviewCustomer(userId, "approve");
+}
+
+export function denyCustomer(userId) {
+  return reviewCustomer(userId, "deny");
 }

@@ -4,7 +4,6 @@ import {
   onSnapshot,
   query,
   serverTimestamp,
-  setDoc,
   where,
   writeBatch
 } from "firebase/firestore";
@@ -57,43 +56,6 @@ export function listenToUserNotifications(userId, onNotifications, onError) {
     (snapshot) => onNotifications(mapNotificationSnapshot(snapshot)),
     onError
   );
-}
-
-export async function createAccessDecisionNotification(request, status) {
-  if (!request?.customerId) return;
-
-  const approved = status === "approved";
-  const title = request.documentTitle || "your document";
-  const notificationId = `${request.id}_${status}`;
-
-  await setDoc(doc(db, "notifications", notificationId), {
-    recipientId: request.customerId,
-    recipientName: request.customerName || "",
-    recipientEmail: request.customerEmail || "",
-    type: approved ? "approved" : "denied",
-    message: approved
-      ? `Your request for ${title} has been approved.`
-      : `Your request for ${title} was denied.`,
-    documentId: request.documentId || "",
-    documentTitle: title,
-    requestId: request.id,
-    read: false,
-    createdAt: serverTimestamp()
-  });
-}
-
-export async function createAccountApprovalNotification(customer) {
-  if (!customer?.id) return;
-
-  await setDoc(doc(db, "notifications", `${customer.id}_account-approved`), {
-    recipientId: customer.id,
-    recipientName: customer.name || "",
-    recipientEmail: customer.email || "",
-    type: "account-approved",
-    message: "Your account has been approved. You can now access the document portal.",
-    read: false,
-    createdAt: serverTimestamp()
-  });
 }
 
 export async function markNotificationsRead(notifications) {

@@ -1,5 +1,7 @@
+import { useEffect } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router";
 import { AuthProvider, useAuth } from "./context/AuthContext";
+import { checkApiConnection } from "./services/apiClient.js";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 import AdminDashboard from "./pages/AdminDashboard";
@@ -47,6 +49,21 @@ function LoadingScreen() {
     </div>;
 }
 function App() {
+  useEffect(() => {
+    checkApiConnection()
+      .then((result) => {
+        console.info(
+          `[BrandTech API] Frontend connected to Express: ${result.service}`
+        );
+      })
+      .catch((error) => {
+        console.error(
+          "[BrandTech API] Frontend could not connect to Express.",
+          error
+        );
+      });
+  }, []);
+
   return <AuthProvider>
       <BrowserRouter>
         <AppRoutes />

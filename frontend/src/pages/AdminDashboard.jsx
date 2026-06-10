@@ -2,11 +2,8 @@ import { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router";
 import {
   collection,
-  doc,
   onSnapshot,
   query,
-  serverTimestamp,
-  updateDoc,
   where
 } from "firebase/firestore";
 import {
@@ -40,14 +37,17 @@ import {
   uploadDocument
 } from "../services/documentService.js";
 import {
+  approveAccessRequest,
+  denyAccessRequest,
+  grantAccessRequest,
   listenToAccessRequests,
-  updateAccessRequestStatus
+  revokeAccessRequest
 } from "../services/requestService.js";
-import { listenToActiveCustomers } from "../services/userService.js";
 import {
-  createAccessDecisionNotification,
-  createAccountApprovalNotification
-} from "../services/notificationService.js";
+  approveCustomer,
+  denyCustomer,
+  listenToActiveCustomers
+} from "../services/userService.js";
 const BS_BLACK = "#101820";
 const BS_GOLD = "#F2A900";
 const BS_MAROON = "#8A2A2B";
@@ -58,6 +58,7 @@ function StatusBadge({ status }) {
     pending: { bg: "rgba(242,169,0,0.12)", color: "#A37200", label: "Pending" },
     approved: { bg: "rgba(34,197,94,0.12)", color: "#166534", label: "Approved" },
     denied: { bg: "rgba(138,42,43,0.12)", color: BS_MAROON, label: "Denied" },
+    revoked: { bg: "rgba(138,42,43,0.12)", color: BS_MAROON, label: "Revoked" },
     "Access Granted": { bg: "rgba(34,197,94,0.12)", color: "#166534", label: "Access Granted" },
     "Access Denied": { bg: "rgba(138,42,43,0.12)", color: BS_MAROON, label: "Access Denied" },
     "Access Revoked": { bg: "rgba(138,42,43,0.12)", color: BS_MAROON, label: "Access Revoked" }
@@ -221,8 +222,8 @@ function AdminDashboard() {
     const req = requests.find((r) => r.id === id);
     if (!req) return;
     try {
-      await updateAccessRequestStatus(id, "approved", user);
-      await createAccessDecisionNotification(req, "approved");
+      setRequestLoadError("");
+      await approveAccessRequest(id);
       const entry = {
         id: `a${Date.now()}`,
         customer: req.customerName,
@@ -236,15 +237,15 @@ function AdminDashboard() {
       setAuditLog((prev) => [entry, ...prev]);
     } catch (error) {
       console.error(error);
-      setRequestLoadError("Unable to approve request. Check Firestore permissions.");
+      setRequestLoadError(error.message || "Unable to approve request.");
     }
   };
   const denyRequest = async (id) => {
     const req = requests.find((r) => r.id === id);
     if (!req) return;
     try {
-      await updateAccessRequestStatus(id, "denied", user);
-      await createAccessDecisionNotification(req, "denied");
+      setRequestLoadError("");
+      await denyAccessRequest(id);
       const entry = {
         id: `a${Date.now()}`,
         customer: req.customerName,
@@ -258,42 +259,52 @@ function AdminDashboard() {
       setAuditLog((prev) => [entry, ...prev]);
     } catch (error) {
       console.error(error);
-      setRequestLoadError("Unable to deny request. Check Firestore permissions.");
+      setRequestLoadError(error.message || "Unable to deny request.");
     }
   };
-  const grantAccess = (requestId) => {
+  const grantAccess = async (requestId) => {
     const auditEntry = auditLog.find((a) => a.requestId === requestId && (a.action === "Access Denied" || a.action === "Access Revoked"));
     if (!auditEntry) return;
-    if (requestId) {
-      setRequests((prev) => prev.map((r) => r.id === requestId ? { ...r, status: "approved" } : r));
+    try {
+      setRequestLoadError("");
+      await grantAccessRequest(requestId);
+      const newEntry = {
+        id: `a${Date.now()}`,
+        customer: auditEntry.customer,
+        company: auditEntry.company,
+        document: auditEntry.document,
+        action: "Access Granted",
+        admin: user?.name || "Admin",
+        timestamp: (/* @__PURE__ */ new Date()).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }),
+        requestId
+      };
+      setAuditLog((prev) => [newEntry, ...prev]);
+    } catch (error) {
+      console.error(error);
+      setRequestLoadError(error.message || "Unable to grant document access.");
     }
-    const newEntry = {
-      id: `a${Date.now()}`,
-      customer: auditEntry.customer,
-      company: auditEntry.company,
-      document: auditEntry.document,
-      action: "Access Granted",
-      admin: user?.name || "Admin",
-      timestamp: (/* @__PURE__ */ new Date()).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }),
-      requestId
-    };
-    setAuditLog((prev) => [newEntry, ...prev]);
   };
-  const revokeAccess = (requestId) => {
+  const revokeAccess = async (requestId) => {
     const entry = auditLog.find((a) => a.requestId === requestId);
     if (!entry) return;
-    setRequests((prev) => prev.map((r) => r.id === requestId ? { ...r, status: "denied" } : r));
-    const newEntry = {
-      id: `a${Date.now()}`,
-      customer: entry.customer,
-      company: entry.company,
-      document: entry.document,
-      action: "Access Revoked",
-      admin: user?.name || "Admin",
-      timestamp: (/* @__PURE__ */ new Date()).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }),
-      requestId
-    };
-    setAuditLog((prev) => [newEntry, ...prev]);
+    try {
+      setRequestLoadError("");
+      await revokeAccessRequest(requestId);
+      const newEntry = {
+        id: `a${Date.now()}`,
+        customer: entry.customer,
+        company: entry.company,
+        document: entry.document,
+        action: "Access Revoked",
+        admin: user?.name || "Admin",
+        timestamp: (/* @__PURE__ */ new Date()).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }),
+        requestId
+      };
+      setAuditLog((prev) => [newEntry, ...prev]);
+    } catch (error) {
+      console.error(error);
+      setRequestLoadError(error.message || "Unable to revoke document access.");
+    }
   };
   const handleUpload = async (e) => {
     e.preventDefault();
@@ -351,26 +362,13 @@ function AdminDashboard() {
     }
   };
   const approveUser = async (userId) => {
-    const pendingUser = pendingUsers.find((customer) => customer.id === userId);
     setUpdatingUserId(userId);
     setUserApprovalError("");
     try {
-      await updateDoc(doc(db, "users", userId), {
-        status: "active",
-        approvedAt: serverTimestamp(),
-        approvedBy: user?.id || user?.email || "admin",
-        deniedAt: null,
-        deniedBy: null
-      });
-      try {
-        await createAccountApprovalNotification(pendingUser || { id: userId });
-      } catch (notificationError) {
-        console.error(notificationError);
-        setUserApprovalError("User was approved, but the approval notification could not be created. Check Firestore notification rules.");
-      }
+      await approveCustomer(userId);
     } catch (error) {
       console.error(error);
-      setUserApprovalError("Unable to approve user. Check Firestore permissions.");
+      setUserApprovalError(error.message || "Unable to approve user.");
     } finally {
       setUpdatingUserId("");
     }
@@ -379,14 +377,10 @@ function AdminDashboard() {
     setUpdatingUserId(userId);
     setUserApprovalError("");
     try {
-      await updateDoc(doc(db, "users", userId), {
-        status: "denied",
-        deniedAt: serverTimestamp(),
-        deniedBy: user?.id || user?.email || "admin"
-      });
+      await denyCustomer(userId);
     } catch (error) {
       console.error(error);
-      setUserApprovalError("Unable to deny user. Check Firestore permissions.");
+      setUserApprovalError(error.message || "Unable to deny user.");
     } finally {
       setUpdatingUserId("");
     }
@@ -1197,7 +1191,8 @@ function AuditContent({ auditLog, onRevoke, onGrant, requests }) {
             {auditLog.map((entry, i) => {
     const req = requests.find((r) => r.id === entry.requestId);
     const canRevoke = req?.status === "approved" && entry.action === "Access Granted";
-    const canGrant = req?.status === "denied" && entry.action === "Access Denied" || (req?.status === "denied" || !req) && entry.action === "Access Revoked";
+    const canGrant = (req?.status === "denied" && entry.action === "Access Denied")
+      || (req?.status === "revoked" && entry.action === "Access Revoked");
     return <tr key={entry.id} style={{ borderBottom: i < auditLog.length - 1 ? "1px solid #F3F4F6" : "none" }}>
                   <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>{entry.customer}</td>
                   <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{entry.company}</td>

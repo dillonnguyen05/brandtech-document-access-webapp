@@ -6,10 +6,10 @@ import {
   query,
   serverTimestamp,
   setDoc,
-  updateDoc,
   where
 } from "firebase/firestore";
 import { db } from "../firebase/firebaseConfig";
+import { apiRequest } from "./apiClient.js";
 
 export async function createAccessRequest(user, document) {
   if (!user?.id) {
@@ -97,11 +97,27 @@ export function listenToCustomerRequests(userId, onRequests, onError) {
   );
 }
 
-export async function updateAccessRequestStatus(requestId, status, adminUser) {
-  await updateDoc(doc(db, "accessRequests", requestId), {
-    status,
-    reviewedAt: serverTimestamp(),
-    reviewedBy: adminUser?.id || adminUser?.email || "admin",
-    reviewedByName: adminUser?.name || "Admin"
-  });
+function updateAccessRequest(requestId, action) {
+  return apiRequest(
+    `/api/admin/access-requests/${encodeURIComponent(requestId)}/${action}`,
+    {
+      method: "POST"
+    }
+  );
+}
+
+export function approveAccessRequest(requestId) {
+  return updateAccessRequest(requestId, "approve");
+}
+
+export function denyAccessRequest(requestId) {
+  return updateAccessRequest(requestId, "deny");
+}
+
+export function grantAccessRequest(requestId) {
+  return updateAccessRequest(requestId, "grant");
+}
+
+export function revokeAccessRequest(requestId) {
+  return updateAccessRequest(requestId, "revoke");
 }
