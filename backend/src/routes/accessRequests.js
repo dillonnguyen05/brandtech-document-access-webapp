@@ -4,6 +4,7 @@ import { FieldValue } from "firebase-admin/firestore";
 import { adminDb } from "../firebaseAdmin.js";
 
 const router = express.Router();
+const customerAccessRequestsRouter = express.Router();
 
 const decisionConfig = {
   approve: {
@@ -65,6 +66,22 @@ function adminIdentity(req) {
     name: req.userProfile.name || req.auth.email || "Admin",
     email: req.auth.email || req.userProfile.email || ""
   };
+}
+
+function documentTargetsCustomer(document, customerId, company) {
+  if (!document.targetType || document.targetType === "all") {
+    return true;
+  }
+
+  if (document.targetType === "company") {
+    return Boolean(company) && document.targetCompany === company;
+  }
+
+  if (document.targetType === "customer") {
+    return document.targetCustomerId === customerId;
+  }
+
+  return false;
 }
 
 async function updateAccessDecision(req, action) {
@@ -191,4 +208,77 @@ router.post("/:requestId/revoke", async (req, res) => {
   });
 });
 
+customerAccessRequestsRouter.post("/", async (req, res) => {
+  const documentId = typeof req.body.documentId === "string"
+    ? req.body.documentId.trim()
+    : "";
+
+  if (!documentId) {
+    throw createRouteError(400, "Select a document before requesting access.");
+  }
+
+  const customerId = req.auth.uid;
+  const customer = req.userProfile;
+  const requestId = `${customerId}_${documentId}`;
+  const documentRef = adminDb.collection("documents").doc(documentId);
+  const requestRef = adminDb.collection("accessRequests").doc(requestId);
+
+  await adminDb.runTransaction(async (transaction) => {
+    const [documentSnapshot, requestSnapshot] = await Promise.all([
+      transaction.get(documentRef),
+      transaction.get(requestRef)
+    ]);
+
+    if (!documentSnapshot.exists) {
+      throw createRouteError(404, "Document not found.");
+    }
+
+    const document = documentSnapshot.data();
+
+    if (document.active === false) {
+      throw createRouteError(409, "This document is no longer active.");
+    }
+
+    if (!documentTargetsCustomer(document, customerId, customer.company || "")) {
+      throw createRouteError(403, "This document is not assigned to your account.");
+    }
+
+    if (requestSnapshot.exists) {
+      const currentStatus = requestSnapshot.data().status;
+
+      if (currentStatus === "pending" || currentStatus === "approved") {
+        throw createRouteError(
+          409,
+          `This document request is already ${currentStatus}.`
+        );
+      }
+    }
+
+    transaction.set(requestRef, {
+      customerId,
+      customerName: customer.name || "",
+      customerEmail: req.auth.email || customer.email || "",
+      company: customer.company || "",
+      documentId,
+      documentTitle: document.title || document.fileName || "Untitled Document",
+      documentCategory: document.category || "Uncategorized",
+      status: "pending",
+      createdAt: FieldValue.serverTimestamp(),
+      reviewedAt: null,
+      reviewedBy: null,
+      reviewedByName: null,
+      lastAction: "requested"
+    });
+  });
+
+  res.status(201).json({
+    message: "Access request submitted.",
+    requestId,
+    status: "pending"
+  });
+});
+
+export {
+  customerAccessRequestsRouter
+};
 export default router;

@@ -7,6 +7,7 @@ import multer from "multer";
 import { adminDb, adminStorage } from "../firebaseAdmin.js";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
+const SIGNED_URL_LIFETIME_MS = 5 * 60 * 1000;
 const ALLOWED_EXTENSIONS = new Set([
   ".pdf",
   ".doc",
@@ -39,7 +40,9 @@ const upload = multer({
     callback(null, true);
   }
 });
+
 const router = express.Router();
+const documentAccessRouter = express.Router();
 
 function createRouteError(status, message) {
   const error = new Error(message);
@@ -55,13 +58,42 @@ function safeFileName(fileName) {
   return fileName.replace(/[^a-zA-Z0-9._-]/g, "-");
 }
 
-function createDownloadUrl(bucketName, filePath, downloadToken) {
-  return [
-    "https://firebasestorage.googleapis.com/v0/b",
-    encodeURIComponent(bucketName),
-    "o",
-    `${encodeURIComponent(filePath)}?alt=media&token=${downloadToken}`
-  ].join("/");
+function timestampToIso(value) {
+  return typeof value?.toDate === "function"
+    ? value.toDate().toISOString()
+    : null;
+}
+
+function formatDocumentSnapshot(documentSnapshot) {
+  const data = documentSnapshot.data();
+  const {
+    downloadURL,
+    storagePath,
+    ...publicData
+  } = data;
+
+  return {
+    id: documentSnapshot.id,
+    ...publicData,
+    createdAt: timestampToIso(data.createdAt),
+    updatedAt: timestampToIso(data.updatedAt)
+  };
+}
+
+function documentTargetsCustomer(document, customerId, company) {
+  if (!document.targetType || document.targetType === "all") {
+    return true;
+  }
+
+  if (document.targetType === "company") {
+    return Boolean(company) && document.targetCompany === company;
+  }
+
+  if (document.targetType === "customer") {
+    return document.targetCustomerId === customerId;
+  }
+
+  return false;
 }
 
 async function validateTarget(body) {
@@ -146,6 +178,54 @@ async function validateTarget(body) {
   };
 }
 
+async function revokeLegacyDownloadLink(documentSnapshot) {
+  const document = documentSnapshot.data();
+
+  if (!document.downloadURL) return;
+
+  if (document.storagePath) {
+    await adminStorage
+      .bucket()
+      .file(document.storagePath)
+      .setMetadata({
+        metadata: {
+          firebaseStorageDownloadTokens: randomUUID()
+        }
+      })
+      .catch((error) => {
+        console.error(
+          `Unable to rotate legacy token for ${documentSnapshot.id}:`,
+          error.message
+        );
+      });
+  }
+
+  await documentSnapshot.ref.update({
+    downloadURL: FieldValue.delete()
+  });
+}
+
+function adminIdentity(req) {
+  return {
+    id: req.auth.uid,
+    name: req.userProfile.name || req.auth.email || "Admin",
+    email: req.auth.email || req.userProfile.email || ""
+  };
+}
+
+router.get("/", async (req, res) => {
+  const snapshot = await adminDb
+    .collection("documents")
+    .orderBy("createdAt", "desc")
+    .get();
+
+  await Promise.all(snapshot.docs.map(revokeLegacyDownloadLink));
+
+  res.status(200).json({
+    documents: snapshot.docs.map(formatDocumentSnapshot)
+  });
+});
+
 router.post("/", upload.single("file"), async (req, res) => {
   if (!req.file) {
     throw createRouteError(400, "Please select a file.");
@@ -159,23 +239,20 @@ router.post("/", upload.single("file"), async (req, res) => {
 
   const target = await validateTarget(req.body);
   const bucket = adminStorage.bucket();
-  const downloadToken = randomUUID();
   const filePath = `files/${Date.now()}-${randomUUID()}-${safeFileName(req.file.originalname)}`;
   const storageFile = bucket.file(filePath);
-  const adminName = req.userProfile.name || req.auth.email || "Admin";
-  const adminEmail = req.auth.email || req.userProfile.email || "";
+  const admin = adminIdentity(req);
 
   await storageFile.save(req.file.buffer, {
     resumable: false,
     metadata: {
-      contentType: req.file.mimetype || "application/octet-stream",
-      metadata: {
-        firebaseStorageDownloadTokens: downloadToken
-      }
+      contentType: req.file.mimetype || "application/octet-stream"
     }
   });
 
   try {
+    const documentRef = adminDb.collection("documents").doc();
+    const auditRef = adminDb.collection("auditLog").doc();
     const metadata = {
       title,
       type: cleanText(req.body.type) || "Other",
@@ -185,20 +262,36 @@ router.post("/", upload.single("file"), async (req, res) => {
       fileSize: req.file.size,
       fileType: req.file.mimetype || "application/octet-stream",
       storagePath: filePath,
-      downloadURL: createDownloadUrl(bucket.name, filePath, downloadToken),
-      uploadedBy: req.auth.uid,
-      uploadedByName: adminName,
-      uploadedByEmail: adminEmail,
+      uploadedBy: admin.id,
+      uploadedByName: admin.name,
+      uploadedByEmail: admin.email,
       active: true,
       createdAt: FieldValue.serverTimestamp()
     };
-    const documentRef = await adminDb.collection("documents").add(metadata);
+    const batch = adminDb.batch();
+
+    batch.set(documentRef, metadata);
+    batch.set(auditRef, {
+      customerId: "",
+      customer: "",
+      company: target.targetCompany || "",
+      documentId: documentRef.id,
+      document: title,
+      action: "Document Uploaded",
+      adminId: admin.id,
+      admin: admin.name,
+      adminEmail: admin.email,
+      requestId: "",
+      createdAt: FieldValue.serverTimestamp()
+    });
+    await batch.commit();
 
     res.status(201).json({
       message: "Document uploaded successfully.",
       document: {
         id: documentRef.id,
         ...metadata,
+        storagePath: undefined,
         createdAt: null
       }
     });
@@ -213,4 +306,223 @@ router.post("/", upload.single("file"), async (req, res) => {
   }
 });
 
+router.patch("/:documentId", async (req, res) => {
+  const documentRef = adminDb
+    .collection("documents")
+    .doc(req.params.documentId);
+  const documentSnapshot = await documentRef.get();
+
+  if (!documentSnapshot.exists) {
+    throw createRouteError(404, "Document not found.");
+  }
+
+  const title = cleanText(req.body.title);
+
+  if (!title) {
+    throw createRouteError(400, "Document title is required.");
+  }
+
+  const target = await validateTarget(req.body);
+  const admin = adminIdentity(req);
+  const updates = {
+    title,
+    type: cleanText(req.body.type) || "Other",
+    category: cleanText(req.body.category) || "Uncategorized",
+    ...target,
+    updatedAt: FieldValue.serverTimestamp(),
+    updatedBy: admin.id,
+    updatedByName: admin.name
+  };
+  const auditRef = adminDb.collection("auditLog").doc();
+  const batch = adminDb.batch();
+
+  batch.update(documentRef, updates);
+  batch.set(auditRef, {
+    customerId: "",
+    customer: "",
+    company: target.targetCompany || "",
+    documentId: documentRef.id,
+    document: title,
+    action: "Document Updated",
+    adminId: admin.id,
+    admin: admin.name,
+    adminEmail: admin.email,
+    requestId: "",
+    createdAt: FieldValue.serverTimestamp()
+  });
+  await batch.commit();
+
+  res.status(200).json({
+    message: "Document updated.",
+    document: {
+      ...formatDocumentSnapshot(documentSnapshot),
+      ...updates,
+      updatedAt: null
+    }
+  });
+});
+
+router.delete("/:documentId", async (req, res) => {
+  const documentRef = adminDb
+    .collection("documents")
+    .doc(req.params.documentId);
+  const documentSnapshot = await documentRef.get();
+
+  if (!documentSnapshot.exists) {
+    throw createRouteError(404, "Document not found.");
+  }
+
+  const document = documentSnapshot.data();
+
+  if (document.storagePath) {
+    await adminStorage
+      .bucket()
+      .file(document.storagePath)
+      .delete({ ignoreNotFound: true });
+  }
+
+  const [requestSnapshot, notificationSnapshot] = await Promise.all([
+    adminDb
+      .collection("accessRequests")
+      .where("documentId", "==", documentRef.id)
+      .get(),
+    adminDb
+      .collection("notifications")
+      .where("documentId", "==", documentRef.id)
+      .get()
+  ]);
+  const admin = adminIdentity(req);
+  const auditRef = adminDb.collection("auditLog").doc();
+  const batch = adminDb.batch();
+
+  batch.delete(documentRef);
+  requestSnapshot.docs.forEach((requestDocument) => {
+    batch.delete(requestDocument.ref);
+  });
+  notificationSnapshot.docs.forEach((notificationDocument) => {
+    batch.delete(notificationDocument.ref);
+  });
+  batch.set(auditRef, {
+    customerId: "",
+    customer: "",
+    company: document.targetCompany || "",
+    documentId: documentRef.id,
+    document: document.title || document.fileName || "Untitled Document",
+    action: "Document Deleted",
+    adminId: admin.id,
+    admin: admin.name,
+    adminEmail: admin.email,
+    requestId: "",
+    createdAt: FieldValue.serverTimestamp()
+  });
+  await batch.commit();
+
+  res.status(200).json({
+    message: "Document deleted.",
+    documentId: documentRef.id
+  });
+});
+
+documentAccessRouter.get("/", async (req, res) => {
+  if (req.userProfile.role === "admin") {
+    const snapshot = await adminDb
+      .collection("documents")
+      .orderBy("createdAt", "desc")
+      .get();
+
+    res.status(200).json({
+      documents: snapshot.docs.map(formatDocumentSnapshot)
+    });
+    return;
+  }
+
+  const snapshot = await adminDb
+    .collection("documents")
+    .orderBy("createdAt", "desc")
+    .get();
+  const company = req.userProfile.company || "";
+  const documents = snapshot.docs
+    .filter((documentSnapshot) => {
+      const document = documentSnapshot.data();
+      return document.active !== false
+        && documentTargetsCustomer(document, req.auth.uid, company);
+    })
+    .map(formatDocumentSnapshot);
+
+  res.status(200).json({ documents });
+});
+
+documentAccessRouter.get("/:documentId/download", async (req, res) => {
+  const documentRef = adminDb
+    .collection("documents")
+    .doc(req.params.documentId);
+  const documentSnapshot = await documentRef.get();
+
+  if (!documentSnapshot.exists) {
+    throw createRouteError(404, "Document not found.");
+  }
+
+  const document = documentSnapshot.data();
+
+  if (document.active === false) {
+    throw createRouteError(409, "This document is no longer active.");
+  }
+
+  if (req.userProfile.role !== "admin") {
+    if (!documentTargetsCustomer(
+      document,
+      req.auth.uid,
+      req.userProfile.company || ""
+    )) {
+      throw createRouteError(403, "This document is not assigned to your account.");
+    }
+
+    const requestSnapshot = await adminDb
+      .collection("accessRequests")
+      .doc(`${req.auth.uid}_${documentRef.id}`)
+      .get();
+
+    if (!requestSnapshot.exists || requestSnapshot.data().status !== "approved") {
+      throw createRouteError(
+        403,
+        "Approved access is required to open this document."
+      );
+    }
+  }
+
+  if (!document.storagePath) {
+    throw createRouteError(404, "The stored file could not be found.");
+  }
+
+  const disposition = req.query.disposition === "inline"
+    ? "inline"
+    : "attachment";
+  const fileName = safeFileName(
+    document.fileName || document.title || "document"
+  );
+  const storageFile = adminStorage.bucket().file(document.storagePath);
+  const [exists] = await storageFile.exists();
+
+  if (!exists) {
+    throw createRouteError(404, "The stored file could not be found.");
+  }
+
+  const [url] = await storageFile.getSignedUrl({
+    version: "v4",
+    action: "read",
+    expires: Date.now() + SIGNED_URL_LIFETIME_MS,
+    responseDisposition: `${disposition}; filename="${fileName}"`,
+    responseType: document.fileType || "application/octet-stream"
+  });
+
+  res.status(200).json({
+    url,
+    expiresInSeconds: SIGNED_URL_LIFETIME_MS / 1000,
+    fileName
+  });
+});
+
+export {
+  documentAccessRouter
+};
 export default router;

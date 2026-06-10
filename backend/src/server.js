@@ -2,11 +2,19 @@ import "dotenv/config";
 import cors from "cors";
 import express from "express";
 
+import requireActiveUser from "./middleware/requireActiveUser.js";
 import requireAdmin from "./middleware/requireAdmin.js";
+import requireCustomer from "./middleware/requireCustomer.js";
 import verifyFirebaseToken from "./middleware/verifyFirebaseToken.js";
-import accessRequestsRouter from "./routes/accessRequests.js";
+import accessRequestsRouter, {
+  customerAccessRequestsRouter
+} from "./routes/accessRequests.js";
 import adminUsersRouter from "./routes/adminUsers.js";
-import documentsRouter from "./routes/documents.js";
+import auditLogRouter from "./routes/auditLog.js";
+import documentsRouter, {
+  documentAccessRouter
+} from "./routes/documents.js";
+import notificationsRouter from "./routes/notifications.js";
 
 const app = express();
 
@@ -58,6 +66,31 @@ app.use(
   verifyFirebaseToken,
   requireAdmin,
   documentsRouter
+);
+app.use(
+  "/api/admin/audit-log",
+  verifyFirebaseToken,
+  requireAdmin,
+  auditLogRouter
+);
+app.use(
+  "/api/documents",
+  verifyFirebaseToken,
+  requireActiveUser,
+  documentAccessRouter
+);
+app.use(
+  "/api/access-requests",
+  verifyFirebaseToken,
+  requireActiveUser,
+  requireCustomer,
+  customerAccessRequestsRouter
+);
+app.use(
+  "/api/notifications",
+  verifyFirebaseToken,
+  requireActiveUser,
+  notificationsRouter
 );
 
 app.use((req, res) => {
