@@ -1,72 +1,43 @@
 import {
   collection,
-  addDoc,
   onSnapshot,
   orderBy,
-  query,
-  serverTimestamp
+  query
 } from "firebase/firestore";
-import { getDownloadURL, ref, uploadBytesResumable } from "firebase/storage";
-import { db, storage } from "../firebase/firebaseConfig";
+import { db } from "../firebase/firebaseConfig";
+import { uploadApiFile } from "./apiClient.js";
 
-export function uploadDocument(file, documentData, user, onProgress) {
+const MAX_FILE_SIZE = 50 * 1024 * 1024;
+
+export async function uploadDocument(file, documentData, onProgress) {
   if (!file) {
     throw new Error("Please select a file.");
   }
 
-  const safeFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, "-");
-  const filePath = `files/${Date.now()}-${safeFileName}`;
-  const fileRef = ref(storage, filePath);
-  const uploadTask = uploadBytesResumable(fileRef, file);
+  if (file.size > MAX_FILE_SIZE) {
+    throw new Error("File must be 50 MB or smaller.");
+  }
 
-  return new Promise((resolve, reject) => {
-    uploadTask.on(
-      "state_changed",
-      (snapshot) => {
-        const progress = Math.round(
-          (snapshot.bytesTransferred / snapshot.totalBytes) * 100
-        );
-        onProgress?.(progress);
-      },
-      (error) => {
-        reject(error);
-      },
-      async () => {
-        try {
-          const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-          const metadata = {
-            title: documentData.title,
-            type: documentData.type,
-            category: documentData.category,
-            targetType: documentData.targetType || "all",
-            targetCustomer: documentData.targetCustomer,
-            targetCompany: documentData.targetCompany || "",
-            targetCustomerId: documentData.targetCustomerId || "",
-            targetCustomerName: documentData.targetCustomerName || "",
-            targetCustomerEmail: documentData.targetCustomerEmail || "",
-            fileName: file.name,
-            fileSize: file.size,
-            fileType: file.type,
-            storagePath: filePath,
-            downloadURL,
-            uploadedBy: user?.id || "",
-            uploadedByName: user?.name || "Admin",
-            uploadedByEmail: user?.email || "",
-            active: true,
-            createdAt: serverTimestamp()
-          };
+  const formData = new FormData();
 
-          const documentRef = await addDoc(collection(db, "documents"), metadata);
-          resolve({
-            id: documentRef.id,
-            ...metadata
-          });
-        } catch (error) {
-          reject(error);
-        }
-      }
-    );
-  });
+  formData.append("file", file);
+  formData.append("title", documentData.title || "");
+  formData.append("type", documentData.type || "Other");
+  formData.append("category", documentData.category || "Uncategorized");
+  formData.append("targetType", documentData.targetType || "all");
+  formData.append("targetCustomer", documentData.targetCustomer || "");
+  formData.append("targetCompany", documentData.targetCompany || "");
+  formData.append("targetCustomerId", documentData.targetCustomerId || "");
+  formData.append("targetCustomerName", documentData.targetCustomerName || "");
+  formData.append("targetCustomerEmail", documentData.targetCustomerEmail || "");
+
+  const result = await uploadApiFile(
+    "/api/admin/documents",
+    formData,
+    onProgress
+  );
+
+  return result.document;
 }
 
 function formatFileSize(bytes) {

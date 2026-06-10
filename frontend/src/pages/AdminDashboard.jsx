@@ -345,7 +345,6 @@ function AdminDashboard() {
           targetCustomerName: uploadTargetType === "customer" ? selectedTargetCustomer?.name || "" : "",
           targetCustomerEmail: uploadTargetType === "customer" ? selectedTargetCustomer?.email || "" : ""
         },
-        user,
         setUploadProgress
       );
 
