@@ -1,7 +1,7 @@
 import express from "express";
 import { FieldValue } from "firebase-admin/firestore";
 
-import { adminDb } from "../firebaseAdmin.js";
+import { adminAuth, adminDb } from "../firebaseAdmin.js";
 
 const router = express.Router();
 
@@ -17,16 +17,35 @@ function timestampToIso(value) {
     : null;
 }
 
-function formatCustomerSnapshot(customerSnapshot) {
+function formatCustomerSnapshot(customerSnapshot, authUser) {
   const data = customerSnapshot.data();
 
   return {
     id: customerSnapshot.id,
     ...data,
+    email: authUser?.email || data.email || "",
+    emailVerified: authUser?.emailVerified === true,
     createdAt: timestampToIso(data.createdAt),
     approvedAt: timestampToIso(data.approvedAt),
     deniedAt: timestampToIso(data.deniedAt)
   };
+}
+
+async function loadAuthUsers(userIds) {
+  const authUsers = new Map();
+
+  for (let index = 0; index < userIds.length; index += 100) {
+    const identifiers = userIds
+      .slice(index, index + 100)
+      .map((uid) => ({ uid }));
+    const result = await adminAuth.getUsers(identifiers);
+
+    result.users.forEach((authUser) => {
+      authUsers.set(authUser.uid, authUser);
+    });
+  }
+
+  return authUsers;
 }
 
 function adminIdentity(req) {
@@ -46,6 +65,24 @@ async function reviewPendingCustomer(req, status) {
     .doc(`${userId}_account-${status}`);
   const auditRef = adminDb.collection("auditLog").doc();
   const approved = status === "approved";
+  let authUser;
+
+  try {
+    authUser = await adminAuth.getUser(userId);
+  } catch (error) {
+    if (error.code === "auth/user-not-found") {
+      throw createRouteError(404, "Firebase Authentication account not found.");
+    }
+
+    throw error;
+  }
+
+  if (approved && !authUser.emailVerified) {
+    throw createRouteError(
+      409,
+      "The customer must verify their email before approval."
+    );
+  }
 
   await adminDb.runTransaction(async (transaction) => {
     const userSnapshot = await transaction.get(userRef);
@@ -70,6 +107,9 @@ async function reviewPendingCustomer(req, status) {
     transaction.update(userRef, approved
       ? {
           status: "active",
+          email: authUser.email || customer.email || "",
+          emailVerified: true,
+          emailVerifiedAt: FieldValue.serverTimestamp(),
           approvedAt: FieldValue.serverTimestamp(),
           approvedBy: admin.id,
           approvedByName: admin.name,
@@ -79,6 +119,11 @@ async function reviewPendingCustomer(req, status) {
         }
       : {
           status: "denied",
+          email: authUser.email || customer.email || "",
+          emailVerified: authUser.emailVerified,
+          emailVerifiedAt: authUser.emailVerified
+            ? FieldValue.serverTimestamp()
+            : null,
           deniedAt: FieldValue.serverTimestamp(),
           deniedBy: admin.id,
           deniedByName: admin.name,
@@ -129,14 +174,41 @@ router.get("/pending", async (req, res) => {
     .where("status", "==", "pending")
     .get();
 
-  const users = snapshot.docs
-    .filter((customerSnapshot) => customerSnapshot.data().role === "customer")
-    .map(formatCustomerSnapshot)
+  const customerSnapshots = snapshot.docs
+    .filter((customerSnapshot) => customerSnapshot.data().role === "customer");
+  const authUsers = await loadAuthUsers(
+    customerSnapshots.map((customerSnapshot) => customerSnapshot.id)
+  );
+  const verificationUpdates = [];
+  const users = customerSnapshots
+    .map((customerSnapshot) => {
+      const data = customerSnapshot.data();
+      const authUser = authUsers.get(customerSnapshot.id);
+      const emailVerified = authUser?.emailVerified === true;
+      const authEmail = authUser?.email || data.email || "";
+
+      if (
+        data.emailVerified !== emailVerified
+        || data.email !== authEmail
+      ) {
+        verificationUpdates.push(customerSnapshot.ref.update({
+          email: authEmail,
+          emailVerified,
+          emailVerifiedAt: emailVerified
+            ? FieldValue.serverTimestamp()
+            : null
+        }));
+      }
+
+      return formatCustomerSnapshot(customerSnapshot, authUser);
+    })
     .sort((a, b) => {
       const aTime = a.createdAt ? Date.parse(a.createdAt) : 0;
       const bTime = b.createdAt ? Date.parse(b.createdAt) : 0;
       return bTime - aTime;
     });
+
+  await Promise.all(verificationUpdates);
 
   res.status(200).json({ users });
 });

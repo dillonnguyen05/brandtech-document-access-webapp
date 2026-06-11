@@ -26,6 +26,12 @@ async function requireActiveUser(req, res, next) {
       });
     }
 
+    if (profile.role === "customer" && req.auth.email_verified !== true) {
+      return res.status(403).json({
+        error: "A verified email address is required."
+      });
+    }
+
     req.userProfile = {
       id: profileSnapshot.id,
       ...profile

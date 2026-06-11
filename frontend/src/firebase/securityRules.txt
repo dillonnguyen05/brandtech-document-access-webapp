@@ -31,14 +31,7 @@ service cloud.firestore {
       allow read: if signedIn()
         && (request.auth.uid == userId || isActiveAdmin());
 
-      allow update: if signedIn()
-        && request.auth.uid == userId
-        && request.resource.data.diff(resource.data).changedKeys().hasOnly([
-          "emailVerified",
-          "emailVerifiedAt"
-        ]);
-
-      allow delete: if false;
+      allow update, delete: if false;
     }
 
     match /documents/{documentId} {

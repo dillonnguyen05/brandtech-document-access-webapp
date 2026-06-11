@@ -30,6 +30,11 @@ export function listenToActiveCustomers(onCustomers, onError) {
   );
 }
 
+export async function loadPendingCustomers() {
+  const result = await apiRequest("/api/admin/users/pending");
+  return result.users;
+}
+
 function reviewCustomer(userId, action) {
   return apiRequest(
     `/api/admin/users/${encodeURIComponent(userId)}/${action}`,

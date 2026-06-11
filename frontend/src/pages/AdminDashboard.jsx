@@ -1,12 +1,6 @@
 import { useCallback, useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router";
 import {
-  collection,
-  onSnapshot,
-  query,
-  where
-} from "firebase/firestore";
-import {
   LayoutDashboard,
   FileText,
   ClipboardList,
@@ -31,7 +25,6 @@ import {
   Trash2
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
-import { db } from "../firebase/firebaseConfig";
 import DocumentPreviewModal from "../components/DocumentPreviewModal";
 import logo from "../imports/brandtech.jpg";
 import {
@@ -52,6 +45,7 @@ import {
 import {
   approveCustomer,
   denyCustomer,
+  loadPendingCustomers,
   listenToActiveCustomers
 } from "../services/userService.js";
 const BS_BLACK = "#101820";
@@ -88,21 +82,19 @@ const NAV = [
 ];
 function formatDate(value) {
   if (!value) return "—";
-  if (typeof value.toDate === "function") {
-    return value.toDate().toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric"
-    });
-  }
-  if (value instanceof Date) {
-    return value.toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric"
-    });
-  }
-  return String(value);
+  const date = typeof value.toDate === "function"
+    ? value.toDate()
+    : value instanceof Date
+      ? value
+      : new Date(value);
+
+  if (Number.isNaN(date.getTime())) return String(value);
+
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric"
+  });
 }
 function AdminDashboard() {
   const { user, logout } = useAuth();
@@ -172,6 +164,16 @@ function AdminDashboard() {
       setAuditLoadError(error.message || "Unable to load the audit log.");
     }
   }, []);
+  const refreshPendingUsers = useCallback(async () => {
+    try {
+      const customers = await loadPendingCustomers();
+      setPendingUsers(customers);
+      setUserApprovalError("");
+    } catch (error) {
+      console.error(error);
+      setUserApprovalError(error.message || "Unable to load pending users.");
+    }
+  }, []);
   const handleLogout = () => {
     logout();
     navigate("/login");
@@ -180,30 +182,29 @@ function AdminDashboard() {
   const approvedCount = requests.filter((r) => r.status === "approved").length;
   const uniqueCustomers = new Set(requests.map((r) => r.customerId)).size;
   useEffect(() => {
-    const pendingUsersQuery = query(
-      collection(db, "users"),
-      where("status", "==", "pending")
-    );
-    const unsubscribe = onSnapshot(
-      pendingUsersQuery,
-      (snapshot) => {
-        const customers = snapshot.docs
-          .map((pendingUserDoc) => ({
-            id: pendingUserDoc.id,
-            ...pendingUserDoc.data()
-          }))
-          .filter((pendingUser) => pendingUser.role === "customer");
+    let active = true;
 
-        setPendingUsers(customers);
-        setUserApprovalError("");
-      },
-      (error) => {
-        console.error(error);
-        setUserApprovalError("Unable to load pending users.");
-      }
-    );
+    const loadPendingUsers = () => {
+      loadPendingCustomers()
+        .then((customers) => {
+          if (!active) return;
+          setPendingUsers(customers);
+          setUserApprovalError("");
+        })
+        .catch((error) => {
+          if (!active) return;
+          console.error(error);
+          setUserApprovalError(error.message || "Unable to load pending users.");
+        });
+    };
 
-    return unsubscribe;
+    loadPendingUsers();
+    const intervalId = window.setInterval(loadPendingUsers, 15e3);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
   }, []);
   useEffect(() => {
     let active = true;
@@ -433,7 +434,10 @@ function AdminDashboard() {
     setUserApprovalError("");
     try {
       await approveCustomer(userId);
-      await refreshAuditLog();
+      await Promise.all([
+        refreshPendingUsers(),
+        refreshAuditLog()
+      ]);
     } catch (error) {
       console.error(error);
       setUserApprovalError(error.message || "Unable to approve user.");
@@ -446,7 +450,10 @@ function AdminDashboard() {
     setUserApprovalError("");
     try {
       await denyCustomer(userId);
-      await refreshAuditLog();
+      await Promise.all([
+        refreshPendingUsers(),
+        refreshAuditLog()
+      ]);
     } catch (error) {
       console.error(error);
       setUserApprovalError(error.message || "Unable to deny user.");
@@ -1250,7 +1257,10 @@ function UserApprovalsContent({
                   <div className="flex items-center gap-2">
                     <button
           onClick={() => onApprove(pendingUser.id)}
-          disabled={isUpdating}
+          disabled={isUpdating || !pendingUser.emailVerified}
+          title={pendingUser.emailVerified
+            ? "Approve customer"
+            : "Email verification is required before approval"}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80 disabled:opacity-50"
           style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 500 }}
         >

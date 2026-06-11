@@ -11,8 +11,7 @@ import {
   doc,
   getDoc,
   serverTimestamp,
-  setDoc,
-  updateDoc
+  setDoc
 } from "firebase/firestore";
 import { auth, db } from "../firebase/firebaseConfig";
 
@@ -75,13 +74,6 @@ async function loadUserProfile(firebaseUser) {
     email: firebaseUser.email,
     emailVerified: firebaseUser.emailVerified
   };
-
-  if (firebaseUser.emailVerified && profileData.emailVerified !== true) {
-    await updateDoc(userRef, {
-      emailVerified: true,
-      emailVerifiedAt: serverTimestamp()
-    });
-  }
 
   if (profile.role === "customer" && !firebaseUser.emailVerified) {
     throw authError("Please verify your email before signing in.", "auth/email-not-verified");
