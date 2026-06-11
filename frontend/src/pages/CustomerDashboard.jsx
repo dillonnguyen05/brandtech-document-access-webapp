@@ -15,7 +15,8 @@ import {
   ChevronRight,
   AlertCircle,
   Camera,
-  Settings
+  Settings,
+  Trash2
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import DocumentPreviewModal from "../components/DocumentPreviewModal";
@@ -28,7 +29,9 @@ import {
   listenToCustomerRequests
 } from "../services/requestService.js";
 import {
+  dismissNotification,
   listenToUserNotifications,
+  markNotificationRead,
   markNotificationsRead
 } from "../services/notificationService.js";
 import logo from "../imports/brandtech.jpg";
@@ -88,6 +91,7 @@ function CustomerDashboard() {
   const [requestLoadError, setRequestLoadError] = useState("");
   const [requestActionError, setRequestActionError] = useState("");
   const [notificationLoadError, setNotificationLoadError] = useState("");
+  const [updatingNotificationId, setUpdatingNotificationId] = useState("");
   const [previewDocument, setPreviewDocument] = useState(null);
   const customerDocuments = documents.filter((document) => documentTargetsCustomer(document, user));
   const approvedDocIds = new Set(
@@ -174,6 +178,42 @@ function CustomerDashboard() {
     } catch (error) {
       console.error(error);
       setNotificationLoadError("Unable to mark notifications as read.");
+    }
+  };
+  const markOneRead = async (notificationId) => {
+    setUpdatingNotificationId(notificationId);
+    setNotificationLoadError("");
+
+    try {
+      await markNotificationRead(notificationId);
+      setNotifications((currentNotifications) => (
+        currentNotifications.map((notification) => (
+          notification.id === notificationId
+            ? { ...notification, read: true }
+            : notification
+        ))
+      ));
+    } catch (error) {
+      console.error(error);
+      setNotificationLoadError(error.message || "Unable to mark notification as read.");
+    } finally {
+      setUpdatingNotificationId("");
+    }
+  };
+  const dismissOneNotification = async (notificationId) => {
+    setUpdatingNotificationId(notificationId);
+    setNotificationLoadError("");
+
+    try {
+      await dismissNotification(notificationId);
+      setNotifications((currentNotifications) => (
+        currentNotifications.filter((notification) => notification.id !== notificationId)
+      ));
+    } catch (error) {
+      console.error(error);
+      setNotificationLoadError(error.message || "Unable to dismiss notification.");
+    } finally {
+      setUpdatingNotificationId("");
     }
   };
   const handleDownloadDocument = async (document) => {
@@ -361,7 +401,10 @@ function CustomerDashboard() {
           {section === "notifications" && <NotificationsSection
     notifications={notifications}
     error={notificationLoadError}
+    updatingNotificationId={updatingNotificationId}
     onMarkAllRead={markAllRead}
+    onMarkRead={markOneRead}
+    onDismiss={dismissOneNotification}
   />}
           {section === "profile" && <ProfileSection user={user} />}
           {section === "settings" && <CustomerSettingsContent user={user} />}
@@ -721,7 +764,10 @@ function RequestsSection({
 function NotificationsSection({
   notifications,
   error,
-  onMarkAllRead
+  updatingNotificationId,
+  onMarkAllRead,
+  onMarkRead,
+  onDismiss
 }) {
   const iconMap = {
     approved: <CheckCircle size={16} style={{ color: "#22C55E" }} />,
@@ -750,7 +796,10 @@ function NotificationsSection({
         {notifications.length === 0 ? <div className="p-10 text-center">
             <Bell size={28} className="mx-auto mb-3" style={{ color: "#D1D5DB" }} />
             <p className="text-sm" style={{ color: BS_GRAY }}>No notifications yet.</p>
-          </div> : notifications.map((notif, i) => <div
+          </div> : notifications.map((notif, i) => {
+    const isUpdating = updatingNotificationId === notif.id;
+
+    return <div
     key={notif.id}
     className="flex items-start gap-4 px-5 py-4"
     style={{
@@ -767,8 +816,33 @@ function NotificationsSection({
                 </p>
                 <p className="text-xs mt-1" style={{ color: "#9CA3AF" }}>{notif.timestamp}</p>
               </div>
-              {!notif.read && <div className="h-2 w-2 rounded-full flex-shrink-0 mt-1.5" style={{ backgroundColor: BS_GOLD }} />}
-            </div>)}
+              <div className="flex items-center gap-1 flex-shrink-0">
+                {!notif.read && <button
+    type="button"
+    onClick={() => onMarkRead(notif.id)}
+    disabled={isUpdating}
+    className="h-8 w-8 flex items-center justify-center rounded-md hover:bg-gray-100 disabled:opacity-40"
+    style={{ color: "#166534" }}
+    title="Mark as read"
+    aria-label="Mark notification as read"
+  >
+                    <CheckCircle size={15} />
+                  </button>}
+                <button
+    type="button"
+    onClick={() => onDismiss(notif.id)}
+    disabled={isUpdating}
+    className="h-8 w-8 flex items-center justify-center rounded-md hover:bg-red-50 disabled:opacity-40"
+    style={{ color: BS_MAROON }}
+    title="Dismiss notification"
+    aria-label="Dismiss notification"
+  >
+                  <Trash2 size={15} />
+                </button>
+                {!notif.read && <div className="h-2 w-2 rounded-full ml-1" style={{ backgroundColor: BS_GOLD }} />}
+              </div>
+            </div>;
+  })}
       </div>
     </div>;
 }

@@ -67,3 +67,21 @@ export async function markNotificationsRead(notifications) {
     })
   });
 }
+
+export function markNotificationRead(notificationId) {
+  return apiRequest(
+    `/api/notifications/${encodeURIComponent(notificationId)}/read`,
+    {
+      method: "PATCH"
+    }
+  );
+}
+
+export function dismissNotification(notificationId) {
+  return apiRequest(
+    `/api/notifications/${encodeURIComponent(notificationId)}`,
+    {
+      method: "DELETE"
+    }
+  );
+}

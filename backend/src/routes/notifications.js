@@ -11,6 +11,26 @@ function createRouteError(status, message) {
   return error;
 }
 
+async function getOwnedNotification(req) {
+  const notificationRef = adminDb
+    .collection("notifications")
+    .doc(req.params.notificationId);
+  const notificationSnapshot = await notificationRef.get();
+
+  if (!notificationSnapshot.exists) {
+    throw createRouteError(404, "Notification not found.");
+  }
+
+  if (notificationSnapshot.data().recipientId !== req.auth.uid) {
+    throw createRouteError(
+      403,
+      "You can only update your own notifications."
+    );
+  }
+
+  return notificationSnapshot;
+}
+
 router.patch("/read", async (req, res) => {
   const notificationIds = Array.isArray(req.body.notificationIds)
     ? [...new Set(req.body.notificationIds)]
@@ -63,6 +83,33 @@ router.patch("/read", async (req, res) => {
   res.status(200).json({
     message: "Notifications marked as read.",
     updated
+  });
+});
+
+router.patch("/:notificationId/read", async (req, res) => {
+  const notificationSnapshot = await getOwnedNotification(req);
+
+  if (!notificationSnapshot.data().read) {
+    await notificationSnapshot.ref.update({
+      read: true,
+      readAt: FieldValue.serverTimestamp()
+    });
+  }
+
+  res.status(200).json({
+    message: "Notification marked as read.",
+    notificationId: notificationSnapshot.id
+  });
+});
+
+router.delete("/:notificationId", async (req, res) => {
+  const notificationSnapshot = await getOwnedNotification(req);
+
+  await notificationSnapshot.ref.delete();
+
+  res.status(200).json({
+    message: "Notification dismissed.",
+    notificationId: notificationSnapshot.id
   });
 });
 
