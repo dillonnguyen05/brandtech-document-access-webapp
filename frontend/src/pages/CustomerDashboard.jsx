@@ -231,7 +231,7 @@ function CustomerDashboard() {
     /* Sidebar */
   }
       <aside
-    className="flex flex-col flex-shrink-0 h-full"
+          className="flex flex-col shrink-0 h-full"
     style={{
       width: "220px",
       background: "linear-gradient(180deg, #101820 0%, #0B1117 100%)"

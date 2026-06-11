@@ -43,7 +43,10 @@ function formatFirebaseError(error) {
       return "Your account is waiting for admin approval.";
 
     case "auth/account-denied":
-      return "Your account was denied. Please contact BrandTech.";
+      return error.message || "Your account was denied. Please contact BrandTech.";
+
+    case "auth/account-revoked":
+      return error.message || "Your account access was revoked. Please contact BrandTech.";
 
     case "auth/account-disabled":
       return "Your account is disabled. Please contact BrandTech.";
@@ -75,20 +78,34 @@ async function loadUserProfile(firebaseUser) {
     emailVerified: firebaseUser.emailVerified
   };
 
-  if (profile.role === "customer" && !firebaseUser.emailVerified) {
-    throw authError("Please verify your email before signing in.", "auth/email-not-verified");
-  }
-
   if (profile.status === "pending") {
     throw authError("Your account is waiting for admin approval.", "auth/pending-approval");
   }
 
   if (profile.status === "denied") {
-    throw authError("Your account was denied. Please contact BrandTech.", "auth/account-denied");
+    throw authError(
+      profile.accountMessage
+        ? `Your account was denied. Message from BrandTech: ${profile.accountMessage}`
+        : "Your account was denied. Please contact BrandTech.",
+      "auth/account-denied"
+    );
+  }
+
+  if (profile.status === "revoked") {
+    throw authError(
+      profile.accountMessage
+        ? `Your account access was revoked. Message from BrandTech: ${profile.accountMessage}`
+        : "Your account access was revoked. Please contact BrandTech.",
+      "auth/account-revoked"
+    );
   }
 
   if (profile.status === "disabled") {
     throw authError("Your account is disabled. Please contact BrandTech.", "auth/account-disabled");
+  }
+
+  if (profile.role === "customer" && !firebaseUser.emailVerified) {
+    throw authError("Please verify your email before signing in.", "auth/email-not-verified");
   }
 
   return profile;

@@ -35,11 +35,12 @@ export async function loadPendingCustomers() {
   return result.users;
 }
 
-function reviewCustomer(userId, action) {
+function reviewCustomer(userId, action, message = "") {
   return apiRequest(
     `/api/admin/users/${encodeURIComponent(userId)}/${action}`,
     {
-      method: "POST"
+      method: "POST",
+      body: JSON.stringify({ message })
     }
   );
 }
@@ -48,6 +49,10 @@ export function approveCustomer(userId) {
   return reviewCustomer(userId, "approve");
 }
 
-export function denyCustomer(userId) {
-  return reviewCustomer(userId, "deny");
+export function denyCustomer(userId, message) {
+  return reviewCustomer(userId, "deny", message);
+}
+
+export function revokeCustomer(userId, message) {
+  return reviewCustomer(userId, "revoke", message);
 }

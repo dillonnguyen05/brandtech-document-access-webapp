@@ -17,6 +17,20 @@ function timestampToIso(value) {
     : null;
 }
 
+function requireDecisionMessage(value) {
+  const message = typeof value === "string" ? value.trim() : "";
+
+  if (!message) {
+    throw createRouteError(400, "A message explaining this decision is required.");
+  }
+
+  if (message.length > 500) {
+    throw createRouteError(400, "The decision message must be 500 characters or fewer.");
+  }
+
+  return message;
+}
+
 function formatCustomerSnapshot(customerSnapshot, authUser) {
   const data = customerSnapshot.data();
 
@@ -65,6 +79,9 @@ async function reviewPendingCustomer(req, status) {
     .doc(`${userId}_account-${status}`);
   const auditRef = adminDb.collection("auditLog").doc();
   const approved = status === "approved";
+  const decisionMessage = approved
+    ? ""
+    : requireDecisionMessage(req.body.message);
   let authUser;
 
   try {
@@ -107,6 +124,7 @@ async function reviewPendingCustomer(req, status) {
     transaction.update(userRef, approved
       ? {
           status: "active",
+          accountMessage: "",
           email: authUser.email || customer.email || "",
           emailVerified: true,
           emailVerifiedAt: FieldValue.serverTimestamp(),
@@ -119,6 +137,7 @@ async function reviewPendingCustomer(req, status) {
         }
       : {
           status: "denied",
+          accountMessage: decisionMessage,
           email: authUser.email || customer.email || "",
           emailVerified: authUser.emailVerified,
           emailVerifiedAt: authUser.emailVerified
@@ -139,7 +158,7 @@ async function reviewPendingCustomer(req, status) {
       type: approved ? "account-approved" : "account-denied",
       message: approved
         ? "Your account has been approved. You can now access the document portal."
-        : "Your account request was denied. Contact BrandTech if you believe this is an error.",
+        : `Your account request was denied. Reason: ${decisionMessage}`,
       read: false,
       createdAt: FieldValue.serverTimestamp()
     });
@@ -150,6 +169,71 @@ async function reviewPendingCustomer(req, status) {
       company: customer.company || "",
       document: "Customer Account",
       action: approved ? "Account Approved" : "Account Denied",
+      reason: decisionMessage,
+      adminId: admin.id,
+      admin: admin.name,
+      adminEmail: admin.email,
+      requestId: "",
+      createdAt: FieldValue.serverTimestamp()
+    });
+  });
+}
+
+async function revokeActiveCustomer(req) {
+  const { userId } = req.params;
+  const decisionMessage = requireDecisionMessage(req.body.message);
+  const admin = adminIdentity(req);
+  const userRef = adminDb.collection("users").doc(userId);
+  const notificationRef = adminDb
+    .collection("notifications")
+    .doc(`${userId}_account-revoked`);
+  const auditRef = adminDb.collection("auditLog").doc();
+
+  await adminDb.runTransaction(async (transaction) => {
+    const userSnapshot = await transaction.get(userRef);
+
+    if (!userSnapshot.exists) {
+      throw createRouteError(404, "Customer account not found.");
+    }
+
+    const customer = userSnapshot.data();
+
+    if (customer.role !== "customer") {
+      throw createRouteError(400, "Only customer accounts can be revoked.");
+    }
+
+    if (customer.status !== "active") {
+      throw createRouteError(
+        409,
+        `Only active customer accounts can be revoked. This account is ${customer.status || "inactive"}.`
+      );
+    }
+
+    transaction.update(userRef, {
+      status: "revoked",
+      accountMessage: decisionMessage,
+      revokedAt: FieldValue.serverTimestamp(),
+      revokedBy: admin.id,
+      revokedByName: admin.name
+    });
+
+    transaction.set(notificationRef, {
+      recipientId: userId,
+      recipientName: customer.name || "",
+      recipientEmail: customer.email || "",
+      type: "account-revoked",
+      message: `Your account access was revoked. Reason: ${decisionMessage}`,
+      read: false,
+      createdAt: FieldValue.serverTimestamp()
+    });
+
+    transaction.set(auditRef, {
+      customerId: userId,
+      customer: customer.name || "",
+      company: customer.company || "",
+      document: "Customer Account",
+      action: "Account Revoked",
+      reason: decisionMessage,
       adminId: admin.id,
       admin: admin.name,
       adminEmail: admin.email,
@@ -230,6 +314,16 @@ router.post("/:userId/deny", async (req, res) => {
     message: "Customer account denied.",
     userId: req.params.userId,
     status: "denied"
+  });
+});
+
+router.post("/:userId/revoke", async (req, res) => {
+  await revokeActiveCustomer(req);
+
+  res.status(200).json({
+    message: "Customer account revoked.",
+    userId: req.params.userId,
+    status: "revoked"
   });
 });
 

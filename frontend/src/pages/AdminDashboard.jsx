@@ -46,7 +46,8 @@ import {
   approveCustomer,
   denyCustomer,
   loadPendingCustomers,
-  listenToActiveCustomers
+  listenToActiveCustomers,
+  revokeCustomer
 } from "../services/userService.js";
 const BS_BLACK = "#101820";
 const BS_GOLD = "#F2A900";
@@ -119,6 +120,7 @@ function AdminDashboard() {
   const [userApprovalError, setUserApprovalError] = useState("");
   const [updatingUserId, setUpdatingUserId] = useState("");
   const [updatingUserAction, setUpdatingUserAction] = useState("");
+  const [accountDecision, setAccountDecision] = useState(null);
   const [search, setSearch] = useState("");
   const [notifOpen, setNotifOpen] = useState(false);
   const [uploadTitle, setUploadTitle] = useState("");
@@ -451,22 +453,39 @@ function AdminDashboard() {
       setUpdatingUserAction("");
     }
   };
-  const denyUser = async (userId) => {
-    setUpdatingUserId(userId);
-    setUpdatingUserAction("deny");
+  const submitAccountDecision = async (message) => {
+    if (!accountDecision) return;
+
+    const { customer, type } = accountDecision;
+    setUpdatingUserId(customer.id);
+    setUpdatingUserAction(type);
     setUserApprovalError("");
+
     try {
-      await denyCustomer(userId);
-      setPendingUsers((currentUsers) => (
-        currentUsers.filter((pendingUser) => pendingUser.id !== userId)
-      ));
-      await Promise.all([
-        refreshPendingUsers(),
-        refreshAuditLog()
-      ]);
+      if (type === "deny") {
+        await denyCustomer(customer.id, message);
+        setPendingUsers((currentUsers) => (
+          currentUsers.filter((pendingUser) => pendingUser.id !== customer.id)
+        ));
+        await refreshPendingUsers();
+      } else {
+        await revokeCustomer(customer.id, message);
+        setActiveCustomers((currentCustomers) => (
+          currentCustomers.filter((activeCustomer) => activeCustomer.id !== customer.id)
+        ));
+      }
+
+      setAccountDecision(null);
+      await refreshAuditLog();
     } catch (error) {
       console.error(error);
-      setUserApprovalError(error.message || "Unable to deny user.");
+      setUserApprovalError(
+        error.message
+        || (type === "deny"
+          ? "Unable to deny user."
+          : "Unable to revoke customer.")
+      );
+      throw error;
     } finally {
       setUpdatingUserId("");
       setUpdatingUserAction("");
@@ -767,11 +786,14 @@ function AdminDashboard() {
           {section === "requests" && <RequestsContent requests={requests} error={requestLoadError} onApprove={approveRequest} onDeny={denyRequest} />}
           {section === "users" && <UserApprovalsContent
     pendingUsers={pendingUsers}
+    activeCustomers={activeCustomers}
     error={userApprovalError}
+    activeCustomerError={activeCustomerError}
     updatingUserId={updatingUserId}
     updatingUserAction={updatingUserAction}
     onApprove={approveUser}
-    onDeny={denyUser}
+    onDeny={(customer) => setAccountDecision({ customer, type: "deny" })}
+    onRevoke={(customer) => setAccountDecision({ customer, type: "revoke" })}
   />}
           {section === "audit" && <AuditContent auditLog={auditLog} error={auditLoadError} onRevoke={revokeAccess} onGrant={grantAccess} requests={requests} />}
           {section === "settings" && <SettingsContent user={user} />}
@@ -786,6 +808,13 @@ function AdminDashboard() {
     activeCompanies={activeCompanies}
     onClose={() => setEditingDocument(null)}
     onSave={handleUpdateDocument}
+  />}
+      {accountDecision && <AccountDecisionModal
+    key={`${accountDecision.type}-${accountDecision.customer.id}`}
+    customer={accountDecision.customer}
+    type={accountDecision.type}
+    onClose={() => setAccountDecision(null)}
+    onConfirm={submitAccountDecision}
   />}
     </div>;
 }
@@ -1212,13 +1241,17 @@ function RequestsTable({ requests, onApprove, onDeny }) {
 }
 function UserApprovalsContent({
   pendingUsers,
+  activeCustomers,
   error,
+  activeCustomerError,
   updatingUserId,
   updatingUserAction,
   onApprove,
-  onDeny
+  onDeny,
+  onRevoke
 }) {
-  return <div className="bg-white rounded-xl border border-gray-100">
+  return <div className="space-y-6">
+    <div className="bg-white rounded-xl border border-gray-100">
       <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
         <div>
           <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Pending User Approvals</h3>
@@ -1286,7 +1319,7 @@ function UserApprovalsContent({
                       <CheckCircle size={12} /> Approve
                     </button>
                     <button
-          onClick={() => onDeny(pendingUser.id)}
+          onClick={() => onDeny(pendingUser)}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80 border disabled:opacity-50"
           style={{ borderColor: BS_MAROON, color: BS_MAROON }}
         >
@@ -1303,6 +1336,222 @@ function UserApprovalsContent({
               </tr>}
           </tbody>
         </table>
+      </div>
+    </div>
+
+    <div className="bg-white rounded-xl border border-gray-100">
+      <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+        <div>
+          <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Active Customers</h3>
+          <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>Review approved customer accounts and revoke portal access when needed</p>
+        </div>
+        <span
+    className="text-xs px-2.5 py-1 rounded-full"
+    style={{ backgroundColor: "rgba(34,197,94,0.12)", color: "#166534", fontWeight: 500 }}
+  >
+          {activeCustomers.length} active
+        </span>
+      </div>
+
+      {activeCustomerError && <div className="mx-5 mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
+          {activeCustomerError}
+        </div>}
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr style={{ backgroundColor: "#FAFAFA" }}>
+              {["Customer", "Company", "Email", "Phone", "Approved", "Action"].map((heading) => <th
+    key={heading}
+    className="px-4 py-3 text-left text-xs border-b border-gray-100"
+    style={{ color: BS_GRAY, fontWeight: 500 }}
+  >
+                {heading}
+              </th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {activeCustomers.map((customer, index) => {
+    const isUpdating = updatingUserId === customer.id;
+
+    return <tr
+      key={customer.id}
+      style={{ borderBottom: index < activeCustomers.length - 1 ? "1px solid #F3F4F6" : "none" }}
+    >
+                <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>{customer.name || "—"}</td>
+                <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{customer.company || "—"}</td>
+                <td className="px-4 py-3.5 text-xs" style={{ color: BS_BLACK }}>{customer.email || "—"}</td>
+                <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{customer.phone || "—"}</td>
+                <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{formatDate(customer.approvedAt)}</td>
+                <td className="px-4 py-3.5">
+                  {isUpdating ? <span className="inline-flex items-center gap-1.5 text-xs" style={{ color: BS_GRAY, fontWeight: 500 }}>
+                      <Clock size={12} />
+                      {updatingUserAction === "revoke" ? "Revoking..." : "Saving..."}
+                    </span> : <button
+    type="button"
+    onClick={() => onRevoke(customer)}
+    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
+    style={{ borderColor: BS_MAROON, color: BS_MAROON, fontWeight: 500 }}
+  >
+                    <XCircle size={12} /> Revoke Access
+                  </button>}
+                </td>
+              </tr>;
+  })}
+            {activeCustomers.length === 0 && <tr>
+                <td colSpan={6} className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
+                  No active customer accounts.
+                </td>
+              </tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>;
+}
+function AccountDecisionModal({
+  customer,
+  type,
+  onClose,
+  onConfirm
+}) {
+  const isRevoke = type === "revoke";
+  const [message, setMessage] = useState("");
+  const [step, setStep] = useState(1);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const trimmedMessage = message.trim();
+
+  const handleContinue = async () => {
+    if (!trimmedMessage) {
+      setError("Enter a message explaining this decision.");
+      return;
+    }
+
+    if (isRevoke && step === 1) {
+      setError("");
+      setStep(2);
+      return;
+    }
+
+    setSubmitting(true);
+    setError("");
+
+    try {
+      await onConfirm(trimmedMessage);
+    } catch (submitError) {
+      setError(
+        submitError.message
+        || (isRevoke
+          ? "Unable to revoke this customer."
+          : "Unable to deny this customer.")
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+      <div className="w-full max-w-lg rounded-lg bg-white border border-gray-100 shadow-xl">
+        <div className="flex items-start justify-between gap-4 px-5 py-4 border-b border-gray-100">
+          <div>
+            <p className="text-xs mb-1" style={{ color: BS_GRAY }}>
+              {isRevoke ? `Step ${step} of 2` : "Account decision"}
+            </p>
+            <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>
+              {isRevoke ? "Revoke Customer Access" : "Deny Customer Account"}
+            </h3>
+            <p className="text-xs mt-1" style={{ color: BS_GRAY }}>
+              {customer.name || customer.email} · {customer.company || "No company"}
+            </p>
+          </div>
+          <button
+    type="button"
+    onClick={onClose}
+    disabled={submitting}
+    className="h-8 w-8 flex items-center justify-center rounded-lg hover:bg-gray-100 disabled:opacity-50"
+    aria-label="Close account decision"
+  >
+            <XCircle size={16} style={{ color: BS_GRAY }} />
+          </button>
+        </div>
+
+        <div className="p-5">
+          {isRevoke && step === 2 ? <div>
+              <div
+    className="rounded-lg border px-4 py-3 mb-4"
+    style={{ backgroundColor: "rgba(138,42,43,0.05)", borderColor: "rgba(138,42,43,0.18)" }}
+  >
+                <p className="text-sm" style={{ color: BS_MAROON, fontWeight: 600 }}>
+                  Confirm account revocation
+                </p>
+                <p className="text-xs mt-1.5 leading-relaxed" style={{ color: BS_GRAY }}>
+                  This customer will immediately lose access to the portal and all approved documents.
+                </p>
+              </div>
+              <p className="text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 600 }}>Message shown to customer</p>
+              <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm whitespace-pre-wrap" style={{ color: BS_BLACK }}>
+                {trimmedMessage}
+              </div>
+            </div> : <div>
+              <label className="block text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 600 }}>
+                Message shown when the customer signs in
+              </label>
+              <textarea
+    value={message}
+    onChange={(event) => {
+      setMessage(event.target.value);
+      if (error) setError("");
+    }}
+    maxLength={500}
+    rows={5}
+    placeholder={isRevoke
+      ? "Explain why this customer's portal access is being revoked..."
+      : "Explain why this account request was denied..."}
+    className="w-full resize-none px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
+    style={{ color: BS_BLACK }}
+  />
+              <div className="mt-1 flex items-center justify-between gap-4">
+                <p className="text-xs" style={{ color: BS_GRAY }}>Be concise and avoid including sensitive internal information.</p>
+                <span className="text-xs flex-shrink-0" style={{ color: BS_GRAY }}>{message.length}/500</span>
+              </div>
+            </div>}
+
+          {error && <div className="mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
+              {error}
+            </div>}
+        </div>
+
+        <div className="flex items-center justify-between gap-3 px-5 py-4 border-t border-gray-100">
+          <button
+    type="button"
+    onClick={isRevoke && step === 2 ? () => setStep(1) : onClose}
+    disabled={submitting}
+    className="px-4 py-2 rounded-lg text-sm border border-gray-200 hover:bg-gray-50 disabled:opacity-50"
+    style={{ color: BS_GRAY }}
+  >
+            {isRevoke && step === 2 ? "Back" : "Cancel"}
+          </button>
+          <button
+    type="button"
+    onClick={handleContinue}
+    disabled={submitting}
+    className="px-5 py-2 rounded-lg text-sm transition-opacity hover:opacity-85 disabled:opacity-50"
+    style={{
+      backgroundColor: isRevoke || type === "deny" ? BS_MAROON : BS_GOLD,
+      color: "#FFFFFF",
+      fontWeight: 600
+    }}
+  >
+            {submitting
+      ? (isRevoke ? "Revoking..." : "Denying...")
+      : isRevoke && step === 1
+        ? "Review Revocation"
+        : isRevoke
+          ? "Confirm Revocation"
+          : "Deny Account"}
+          </button>
+        </div>
       </div>
     </div>;
 }
