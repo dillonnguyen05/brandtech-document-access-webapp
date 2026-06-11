@@ -118,6 +118,7 @@ function AdminDashboard() {
   const [pendingUsers, setPendingUsers] = useState([]);
   const [userApprovalError, setUserApprovalError] = useState("");
   const [updatingUserId, setUpdatingUserId] = useState("");
+  const [updatingUserAction, setUpdatingUserAction] = useState("");
   const [search, setSearch] = useState("");
   const [notifOpen, setNotifOpen] = useState(false);
   const [uploadTitle, setUploadTitle] = useState("");
@@ -431,9 +432,13 @@ function AdminDashboard() {
   };
   const approveUser = async (userId) => {
     setUpdatingUserId(userId);
+    setUpdatingUserAction("approve");
     setUserApprovalError("");
     try {
       await approveCustomer(userId);
+      setPendingUsers((currentUsers) => (
+        currentUsers.filter((pendingUser) => pendingUser.id !== userId)
+      ));
       await Promise.all([
         refreshPendingUsers(),
         refreshAuditLog()
@@ -443,13 +448,18 @@ function AdminDashboard() {
       setUserApprovalError(error.message || "Unable to approve user.");
     } finally {
       setUpdatingUserId("");
+      setUpdatingUserAction("");
     }
   };
   const denyUser = async (userId) => {
     setUpdatingUserId(userId);
+    setUpdatingUserAction("deny");
     setUserApprovalError("");
     try {
       await denyCustomer(userId);
+      setPendingUsers((currentUsers) => (
+        currentUsers.filter((pendingUser) => pendingUser.id !== userId)
+      ));
       await Promise.all([
         refreshPendingUsers(),
         refreshAuditLog()
@@ -459,6 +469,7 @@ function AdminDashboard() {
       setUserApprovalError(error.message || "Unable to deny user.");
     } finally {
       setUpdatingUserId("");
+      setUpdatingUserAction("");
     }
   };
   return <div className="flex h-screen w-full overflow-hidden" style={{ backgroundColor: BS_LIGHT }}>
@@ -758,6 +769,7 @@ function AdminDashboard() {
     pendingUsers={pendingUsers}
     error={userApprovalError}
     updatingUserId={updatingUserId}
+    updatingUserAction={updatingUserAction}
     onApprove={approveUser}
     onDeny={denyUser}
   />}
@@ -1202,6 +1214,7 @@ function UserApprovalsContent({
   pendingUsers,
   error,
   updatingUserId,
+  updatingUserAction,
   onApprove,
   onDeny
 }) {
@@ -1254,27 +1267,32 @@ function UserApprovalsContent({
                 </td>
                 <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{formatDate(pendingUser.createdAt)}</td>
                 <td className="px-4 py-3.5">
-                  <div className="flex items-center gap-2">
+                  {isUpdating ? <span
+    className="inline-flex items-center gap-1.5 text-xs"
+    style={{ color: BS_GRAY, fontWeight: 500 }}
+  >
+                      <Clock size={12} />
+                      {updatingUserAction === "deny" ? "Denying..." : "Approving..."}
+                    </span> : <div className="flex items-center gap-2">
                     <button
           onClick={() => onApprove(pendingUser.id)}
-          disabled={isUpdating || !pendingUser.emailVerified}
+          disabled={!pendingUser.emailVerified}
           title={pendingUser.emailVerified
             ? "Approve customer"
             : "Email verification is required before approval"}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80 disabled:opacity-50"
           style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 500 }}
         >
-                      <CheckCircle size={12} /> {isUpdating ? "Saving..." : "Approve"}
+                      <CheckCircle size={12} /> Approve
                     </button>
                     <button
           onClick={() => onDeny(pendingUser.id)}
-          disabled={isUpdating}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80 border disabled:opacity-50"
           style={{ borderColor: BS_MAROON, color: BS_MAROON }}
         >
                       <XCircle size={12} /> Deny
                     </button>
-                  </div>
+                  </div>}
                 </td>
               </tr>;
   })}
