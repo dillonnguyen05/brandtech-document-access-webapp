@@ -142,6 +142,7 @@ function AdminDashboard() {
   const [activeCustomerError, setActiveCustomerError] = useState("");
   const [previewDocument, setPreviewDocument] = useState(null);
   const [editingDocument, setEditingDocument] = useState(null);
+  const [accessDecision, setAccessDecision] = useState(null);
   const fileRef = useRef(null);
   const activeCompanies = Array.from(
     new Set(activeCustomers.map((customer) => customer.company).filter(Boolean))
@@ -289,17 +290,11 @@ function AdminDashboard() {
       setRequestLoadError(error.message || "Unable to approve request.");
     }
   };
-  const denyRequest = async (id) => {
-    const req = requests.find((r) => r.id === id);
-    if (!req) return;
-    try {
-      setRequestLoadError("");
-      await denyAccessRequest(id);
-      await refreshAuditLog();
-    } catch (error) {
-      console.error(error);
-      setRequestLoadError(error.message || "Unable to deny request.");
-    }
+  const denyRequest = (request) => {
+    setAccessDecision({
+      request,
+      type: "deny"
+    });
   };
   const grantAccess = async (requestId) => {
     const auditEntry = auditLog.find((a) => a.requestId === requestId && (a.action === "Access Denied" || a.action === "Access Revoked"));
@@ -313,16 +308,39 @@ function AdminDashboard() {
       setRequestLoadError(error.message || "Unable to grant document access.");
     }
   };
-  const revokeAccess = async (requestId) => {
-    const entry = auditLog.find((a) => a.requestId === requestId);
-    if (!entry) return;
+  const revokeAccess = (requestId) => {
+    const request = requests.find((item) => item.id === requestId);
+    if (!request) return;
+
+    setAccessDecision({
+      request,
+      type: "revoke"
+    });
+  };
+  const submitAccessDecision = async (message) => {
+    if (!accessDecision) return;
+
+    const { request, type } = accessDecision;
+
     try {
       setRequestLoadError("");
-      await revokeAccessRequest(requestId);
+      if (type === "deny") {
+        await denyAccessRequest(request.id, message);
+      } else {
+        await revokeAccessRequest(request.id, message);
+      }
+
+      setAccessDecision(null);
       await refreshAuditLog();
     } catch (error) {
       console.error(error);
-      setRequestLoadError(error.message || "Unable to revoke document access.");
+      setRequestLoadError(
+        error.message
+        || (type === "deny"
+          ? "Unable to deny request."
+          : "Unable to revoke document access.")
+      );
+      throw error;
     }
   };
   const handleUpload = async (e) => {
@@ -816,6 +834,13 @@ function AdminDashboard() {
     onClose={() => setAccountDecision(null)}
     onConfirm={submitAccountDecision}
   />}
+      {accessDecision && <DocumentAccessDecisionModal
+    key={`${accessDecision.type}-${accessDecision.request.id}`}
+    request={accessDecision.request}
+    type={accessDecision.type}
+    onClose={() => setAccessDecision(null)}
+    onConfirm={submitAccessDecision}
+  />}
     </div>;
 }
 function NavButton({
@@ -1220,7 +1245,7 @@ function RequestsTable({ requests, onApprove, onDeny }) {
                       <CheckCircle size={12} /> Approve
                     </button>
                     <button
-    onClick={() => onDeny(req.id)}
+    onClick={() => onDeny(req)}
     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80 border"
     style={{ borderColor: BS_MAROON, color: BS_MAROON }}
   >
@@ -1550,6 +1575,148 @@ function AccountDecisionModal({
         : isRevoke
           ? "Confirm Revocation"
           : "Deny Account"}
+          </button>
+        </div>
+      </div>
+    </div>;
+}
+function DocumentAccessDecisionModal({
+  request,
+  type,
+  onClose,
+  onConfirm
+}) {
+  const isRevoke = type === "revoke";
+  const [message, setMessage] = useState("");
+  const [step, setStep] = useState(1);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const trimmedMessage = message.trim();
+
+  const handleContinue = async () => {
+    if (!trimmedMessage) {
+      setError("Enter a message explaining this decision.");
+      return;
+    }
+
+    if (isRevoke && step === 1) {
+      setError("");
+      setStep(2);
+      return;
+    }
+
+    setSubmitting(true);
+    setError("");
+
+    try {
+      await onConfirm(trimmedMessage);
+    } catch (submitError) {
+      setError(
+        submitError.message
+        || (isRevoke
+          ? "Unable to revoke document access."
+          : "Unable to deny this document request.")
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+      <div className="w-full max-w-lg rounded-lg bg-white border border-gray-100 shadow-xl">
+        <div className="flex items-start justify-between gap-4 px-5 py-4 border-b border-gray-100">
+          <div className="min-w-0">
+            <p className="text-xs mb-1" style={{ color: BS_GRAY }}>
+              {isRevoke ? `Step ${step} of 2` : "Document access decision"}
+            </p>
+            <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>
+              {isRevoke ? "Revoke Document Access" : "Deny Document Request"}
+            </h3>
+            <p className="text-xs mt-1 truncate" style={{ color: BS_GRAY }}>
+              {request.customerName || request.customerEmail} · {request.documentTitle}
+            </p>
+          </div>
+          <button
+    type="button"
+    onClick={onClose}
+    disabled={submitting}
+    className="h-8 w-8 flex items-center justify-center rounded-lg hover:bg-gray-100 disabled:opacity-50"
+    aria-label="Close document access decision"
+  >
+            <XCircle size={16} style={{ color: BS_GRAY }} />
+          </button>
+        </div>
+
+        <div className="p-5">
+          {isRevoke && step === 2 ? <div>
+              <div
+    className="rounded-lg border px-4 py-3 mb-4"
+    style={{ backgroundColor: "rgba(138,42,43,0.05)", borderColor: "rgba(138,42,43,0.18)" }}
+  >
+                <p className="text-sm" style={{ color: BS_MAROON, fontWeight: 600 }}>
+                  Confirm document access revocation
+                </p>
+                <p className="text-xs mt-1.5 leading-relaxed" style={{ color: BS_GRAY }}>
+                  The customer will immediately lose preview and download access to this document.
+                </p>
+              </div>
+              <p className="text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 600 }}>Message shown to customer</p>
+              <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm whitespace-pre-wrap" style={{ color: BS_BLACK }}>
+                {trimmedMessage}
+              </div>
+            </div> : <div>
+              <label className="block text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 600 }}>
+                Message sent to the customer
+              </label>
+              <textarea
+    value={message}
+    onChange={(event) => {
+      setMessage(event.target.value);
+      if (error) setError("");
+    }}
+    maxLength={500}
+    rows={5}
+    placeholder={isRevoke
+      ? "Explain why access to this document is being revoked..."
+      : "Explain why this document request was denied..."}
+    className="w-full resize-none px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
+    style={{ color: BS_BLACK }}
+  />
+              <div className="mt-1 flex items-center justify-between gap-4">
+                <p className="text-xs" style={{ color: BS_GRAY }}>This message appears in the customer notification and request history.</p>
+                <span className="text-xs flex-shrink-0" style={{ color: BS_GRAY }}>{message.length}/500</span>
+              </div>
+            </div>}
+
+          {error && <div className="mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
+              {error}
+            </div>}
+        </div>
+
+        <div className="flex items-center justify-between gap-3 px-5 py-4 border-t border-gray-100">
+          <button
+    type="button"
+    onClick={isRevoke && step === 2 ? () => setStep(1) : onClose}
+    disabled={submitting}
+    className="px-4 py-2 rounded-lg text-sm border border-gray-200 hover:bg-gray-50 disabled:opacity-50"
+    style={{ color: BS_GRAY }}
+  >
+            {isRevoke && step === 2 ? "Back" : "Cancel"}
+          </button>
+          <button
+    type="button"
+    onClick={handleContinue}
+    disabled={submitting}
+    className="px-5 py-2 rounded-lg text-sm transition-opacity hover:opacity-85 disabled:opacity-50"
+    style={{ backgroundColor: BS_MAROON, color: "#FFFFFF", fontWeight: 600 }}
+  >
+            {submitting
+      ? (isRevoke ? "Revoking..." : "Denying...")
+      : isRevoke && step === 1
+        ? "Review Revocation"
+        : isRevoke
+          ? "Confirm Revocation"
+          : "Deny Request"}
           </button>
         </div>
       </div>

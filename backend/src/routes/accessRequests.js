@@ -19,7 +19,10 @@ const decisionConfig = {
     nextStatus: "denied",
     notificationType: "denied",
     auditAction: "Access Denied",
-    message: (title) => `Your request for ${title} was denied.`
+    requiresMessage: true,
+    message: (title, decisionMessage) => (
+      `Your request for ${title} was denied. Reason: ${decisionMessage}`
+    )
   },
   grant: {
     allowedStatuses: ["denied", "revoked"],
@@ -33,7 +36,10 @@ const decisionConfig = {
     nextStatus: "revoked",
     notificationType: "revoked",
     auditAction: "Access Revoked",
-    message: (title) => `Your access to ${title} has been revoked.`
+    requiresMessage: true,
+    message: (title, decisionMessage) => (
+      `Your access to ${title} has been revoked. Reason: ${decisionMessage}`
+    )
   }
 };
 
@@ -41,6 +47,22 @@ function createRouteError(status, message) {
   const error = new Error(message);
   error.status = status;
   return error;
+}
+
+function getDecisionMessage(req, config) {
+  const message = typeof req.body.message === "string"
+    ? req.body.message.trim()
+    : "";
+
+  if (config.requiresMessage && !message) {
+    throw createRouteError(400, "A message explaining this decision is required.");
+  }
+
+  if (message.length > 500) {
+    throw createRouteError(400, "The decision message must be 500 characters or fewer.");
+  }
+
+  return message;
 }
 
 function timestampToIso(value) {
@@ -88,6 +110,7 @@ async function updateAccessDecision(req, action) {
   const config = decisionConfig[action];
   const { requestId } = req.params;
   const admin = adminIdentity(req);
+  const decisionMessage = getDecisionMessage(req, config);
   const requestRef = adminDb.collection("accessRequests").doc(requestId);
   const notificationRef = adminDb.collection("notifications").doc();
   const auditRef = adminDb.collection("auditLog").doc();
@@ -123,7 +146,8 @@ async function updateAccessDecision(req, action) {
       reviewedAt: FieldValue.serverTimestamp(),
       reviewedBy: admin.id,
       reviewedByName: admin.name,
-      lastAction: action
+      lastAction: action,
+      decisionMessage
     });
 
     transaction.set(notificationRef, {
@@ -131,7 +155,7 @@ async function updateAccessDecision(req, action) {
       recipientName: accessRequest.customerName || "",
       recipientEmail: accessRequest.customerEmail || "",
       type: config.notificationType,
-      message: config.message(documentTitle),
+      message: config.message(documentTitle, decisionMessage),
       documentId: accessRequest.documentId || "",
       documentTitle,
       requestId,
@@ -146,6 +170,7 @@ async function updateAccessDecision(req, action) {
       documentId: accessRequest.documentId || "",
       document: documentTitle,
       action: config.auditAction,
+      reason: decisionMessage,
       adminId: admin.id,
       admin: admin.name,
       adminEmail: admin.email,
@@ -267,7 +292,8 @@ customerAccessRequestsRouter.post("/", async (req, res) => {
       reviewedAt: null,
       reviewedBy: null,
       reviewedByName: null,
-      lastAction: "requested"
+      lastAction: "requested",
+      decisionMessage: ""
     });
   });
 

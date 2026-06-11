@@ -44,7 +44,8 @@ function StatusBadge({ status }) {
   const map = {
     pending: { bg: "rgba(242,169,0,0.12)", color: "#A37200", label: "Pending Review", icon: <Clock size={11} /> },
     approved: { bg: "rgba(34,197,94,0.12)", color: "#166534", label: "Approved", icon: <CheckCircle size={11} /> },
-    denied: { bg: "rgba(138,42,43,0.12)", color: BS_MAROON, label: "Denied", icon: <XCircle size={11} /> }
+    denied: { bg: "rgba(138,42,43,0.12)", color: BS_MAROON, label: "Denied", icon: <XCircle size={11} /> },
+    revoked: { bg: "rgba(138,42,43,0.12)", color: BS_MAROON, label: "Revoked", icon: <AlertCircle size={11} /> }
   };
   const cfg = map[status] || { bg: "#F3F4F6", color: BS_GRAY, label: status, icon: null };
   return <span
@@ -737,7 +738,7 @@ function RequestsSection({
             <table className="w-full text-sm">
               <thead>
                 <tr style={{ backgroundColor: "#FAFAFA" }}>
-                  {["Document", "Category", "Date Requested", "Status"].map((h) => <th key={h} className="px-4 py-3 text-left text-xs border-b border-gray-100" style={{ color: BS_GRAY, fontWeight: 500 }}>
+                  {["Document", "Category", "Date Requested", "Status", "Decision Message"].map((h) => <th key={h} className="px-4 py-3 text-left text-xs border-b border-gray-100" style={{ color: BS_GRAY, fontWeight: 500 }}>
                       {h}
                     </th>)}
                 </tr>
@@ -751,9 +752,12 @@ function RequestsSection({
 	                        </span>
 	                      </td>
 	                      <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{req.dateRequested}</td>
-	                      <td className="px-4 py-3.5">
-	                        <StatusBadge status={req.status} />
-	                      </td>
+		                      <td className="px-4 py-3.5">
+		                        <StatusBadge status={req.status} />
+		                      </td>
+                          <td className="px-4 py-3.5 text-xs max-w-[280px]" style={{ color: BS_GRAY }}>
+                            {req.decisionMessage || "—"}
+                          </td>
 	                    </tr>)}
 	              </tbody>
             </table>

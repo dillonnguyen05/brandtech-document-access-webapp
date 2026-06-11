@@ -81,11 +81,12 @@ export function listenToCustomerRequests(userId, onRequests, onError) {
   );
 }
 
-function updateAccessRequest(requestId, action) {
+function updateAccessRequest(requestId, action, message = "") {
   return apiRequest(
     `/api/admin/access-requests/${encodeURIComponent(requestId)}/${action}`,
     {
-      method: "POST"
+      method: "POST",
+      body: JSON.stringify({ message })
     }
   );
 }
@@ -94,14 +95,14 @@ export function approveAccessRequest(requestId) {
   return updateAccessRequest(requestId, "approve");
 }
 
-export function denyAccessRequest(requestId) {
-  return updateAccessRequest(requestId, "deny");
+export function denyAccessRequest(requestId, message) {
+  return updateAccessRequest(requestId, "deny", message);
 }
 
 export function grantAccessRequest(requestId) {
   return updateAccessRequest(requestId, "grant");
 }
 
-export function revokeAccessRequest(requestId) {
-  return updateAccessRequest(requestId, "revoke");
+export function revokeAccessRequest(requestId, message) {
+  return updateAccessRequest(requestId, "revoke", message);
 }
