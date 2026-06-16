@@ -17,6 +17,38 @@ function timestampToIso(value) {
     : null;
 }
 
+function toFiniteNumber(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  const number = Number(value);
+
+  return Number.isFinite(number) ? number : null;
+}
+
+function formatRegistrationLocation(location) {
+  if (!location || typeof location !== "object") {
+    return null;
+  }
+
+  return {
+    latitude: toFiniteNumber(location.latitude),
+    longitude: toFiniteNumber(location.longitude),
+    accuracy: toFiniteNumber(location.accuracy),
+    capturedAt: timestampToIso(location.capturedAt),
+    ipAddress: location.ipAddress || "",
+    userAgent: location.userAgent || "",
+    source: location.source || "browser-geolocation"
+  };
+}
+
+function hasRegistrationLocation(location) {
+  return toFiniteNumber(location?.latitude) !== null
+    && toFiniteNumber(location?.longitude) !== null
+    && toFiniteNumber(location?.accuracy) !== null;
+}
+
 function requireDecisionMessage(value) {
   const message = typeof value === "string" ? value.trim() : "";
 
@@ -39,6 +71,7 @@ function formatCustomerSnapshot(customerSnapshot, authUser) {
     ...data,
     email: authUser?.email || data.email || "",
     emailVerified: authUser?.emailVerified === true,
+    registrationLocation: formatRegistrationLocation(data.registrationLocation),
     createdAt: timestampToIso(data.createdAt),
     approvedAt: timestampToIso(data.approvedAt),
     deniedAt: timestampToIso(data.deniedAt)
@@ -112,6 +145,13 @@ async function reviewPendingCustomer(req, status) {
 
     if (customer.role !== "customer") {
       throw createRouteError(400, "Only customer accounts can be reviewed.");
+    }
+
+    if (approved && !hasRegistrationLocation(customer.registrationLocation)) {
+      throw createRouteError(
+        409,
+        "Registration location is required before approval."
+      );
     }
 
     if (customer.status !== "pending") {

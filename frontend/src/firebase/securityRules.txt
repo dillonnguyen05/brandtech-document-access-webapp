@@ -23,15 +23,10 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow create: if signedIn()
-        && request.auth.uid == userId
-        && request.resource.data.role == "customer"
-        && request.resource.data.status == "pending";
-
       allow read: if signedIn()
         && (request.auth.uid == userId || isActiveAdmin());
 
-      allow update, delete: if false;
+      allow create, update, delete: if false;
     }
 
     match /documents/{documentId} {

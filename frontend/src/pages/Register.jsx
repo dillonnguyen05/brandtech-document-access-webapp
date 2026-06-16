@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
-import { Eye, EyeOff, Mail, Lock, User, Building2, Phone, ChevronRight } from "lucide-react";
+import { Eye, EyeOff, Mail, Lock, User, Building2, Phone, ChevronRight, MapPin } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import logo from "../imports/brandtech.jpg";
 const BS_BLACK = "#101820";
@@ -18,6 +18,33 @@ const COUNTRY_CODES = [
   { id: "FR", label: "🇫🇷 +33", dialCode: "+33", name: "France", minLength: 9, maxLength: 9 },
   { id: "AU", label: "🇦🇺 +61", dialCode: "+61", name: "Australia", minLength: 9, maxLength: 9 }
 ];
+function getRegistrationLocation() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error("Location access is required to register, but this browser does not support location services."));
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        resolve({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+          timestamp: position.timestamp
+        });
+      },
+      () => {
+        reject(new Error("Location access is required to register for this portal."));
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 0
+      }
+    );
+  });
+}
 function Register() {
   const [form, setForm] = useState({
     fullName: "",
@@ -34,6 +61,7 @@ function Register() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(false);
+  const [locationStatus, setLocationStatus] = useState("");
   const { register } = useAuth();
   const navigate = useNavigate();
   const selectedCountry = COUNTRY_CODES.find(
@@ -92,12 +120,27 @@ function Register() {
       return;
     }
     setLoading(true);
-    await new Promise((r) => setTimeout(r, 450));
+    setLocationStatus("Requesting registration location...");
+
+    let registrationLocation;
+
+    try {
+      registrationLocation = await getRegistrationLocation();
+    } catch (locationError) {
+      setLoading(false);
+      setLocationStatus("");
+      setError(locationError.message);
+      return;
+    }
+
+    setLocationStatus("Creating account...");
     const result = await register({
       ...form,
-      phone: `${selectedCountry.dialCode}${form.phone}`
+      phone: `${selectedCountry.dialCode}${form.phone}`,
+      registrationLocation
     });
     setLoading(false);
+    setLocationStatus("");
     if (result.success) {
       setSuccess(result.message || "Account created. Please verify your email before signing in.");
       setTimeout(() => navigate("/login"), 3000);
@@ -361,13 +404,27 @@ function Register() {
                 </label>
               </div>
 
+              <div
+                className="flex items-start gap-2.5 rounded-lg border px-3 py-2.5 text-xs"
+                style={{
+                  backgroundColor: "#F9FAFB",
+                  borderColor: "#E5E7EB",
+                  color: BS_GRAY
+                }}
+              >
+                <MapPin size={15} className="mt-0.5 flex-shrink-0" style={{ color: BS_GOLD }} />
+                <p>
+                  Registration location is required for admin review. If location access is denied, the account cannot be created.
+                </p>
+              </div>
+
               <button
     type="submit"
     disabled={loading}
     className="w-full py-2.5 rounded-lg text-sm transition-opacity disabled:opacity-60 hover:opacity-90 mt-2"
     style={{ backgroundColor: BS_BLACK, color: "#FFFFFF", fontWeight: 600 }}
   >
-                {loading ? "Creating Account..." : "Create Account"}
+                {loading ? locationStatus || "Creating Account..." : "Create Account"}
               </button>
             </form>
 

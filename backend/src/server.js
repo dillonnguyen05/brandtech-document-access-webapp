@@ -15,6 +15,7 @@ import documentsRouter, {
   documentAccessRouter
 } from "./routes/documents.js";
 import notificationsRouter from "./routes/notifications.js";
+import registrationRouter from "./routes/registration.js";
 
 const app = express();
 
@@ -22,6 +23,7 @@ const port = Number(process.env.PORT) || 3000;
 const clientOrigin = process.env.CLIENT_ORIGIN || "http://localhost:5173";
 
 app.disable("x-powered-by");
+app.set("trust proxy", 1);
 
 app.use(cors({
   origin: clientOrigin
@@ -49,6 +51,11 @@ app.get("/api/health", (req, res) => {
   });
 });
 
+app.use(
+  "/api/register",
+  verifyFirebaseToken,
+  registrationRouter
+);
 app.use(
   "/api/admin/users",
   verifyFirebaseToken,

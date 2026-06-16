@@ -9,11 +9,10 @@ import {
 } from "firebase/auth";
 import {
   doc,
-  getDoc,
-  serverTimestamp,
-  setDoc
+  getDoc
 } from "firebase/firestore";
 import { auth, db } from "../firebase/firebaseConfig";
+import { createCustomerProfile } from "../services/registrationService.js";
 
 const AuthContext = createContext(null);
 
@@ -162,26 +161,24 @@ function AuthProvider({ children }) {
   }
 
   async function register(data) {
+    let credential = null;
+    let profileCreated = false;
+
     try {
-      const credential = await createUserWithEmailAndPassword(
+      credential = await createUserWithEmailAndPassword(
         auth,
         data.email,
         data.password
       );
-
-      const profile = {
-        name: data.fullName,
+      await sendEmailVerification(credential.user);
+      await createCustomerProfile({
+        fullName: data.fullName,
         email: data.email,
         company: data.company,
         phone: data.phone || "",
-        role: "customer",
-        status: "pending",
-        emailVerified: false,
-        createdAt: serverTimestamp()
-      };
-
-      await setDoc(doc(db, "users", credential.user.uid), profile);
-      await sendEmailVerification(credential.user);
+        registrationLocation: data.registrationLocation
+      });
+      profileCreated = true;
       await signOut(auth);
 
       setUser(null);
@@ -194,6 +191,12 @@ function AuthProvider({ children }) {
         message: "Account created. Check your email to verify your address, then wait for admin approval."
       };
     } catch (error) {
+      if (credential?.user && !profileCreated) {
+        await credential.user.delete().catch((deleteError) => {
+          console.error("Unable to remove incomplete registration:", deleteError);
+        });
+      }
+
       if (auth.currentUser) {
         await signOut(auth);
       }

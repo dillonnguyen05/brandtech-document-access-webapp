@@ -12,6 +12,7 @@ import {
   ChevronDown,
   Upload,
   Download,
+  ExternalLink,
   Eye,
   CheckCircle,
   XCircle,
@@ -22,7 +23,8 @@ import {
   Camera,
   UserCircle,
   Pencil,
-  Trash2
+  Trash2,
+  MapPin
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import DocumentPreviewModal from "../components/DocumentPreviewModal";
@@ -96,6 +98,40 @@ function formatDate(value) {
     day: "numeric",
     year: "numeric"
   });
+}
+function toFiniteRegistrationNumber(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  const number = Number(value);
+
+  return Number.isFinite(number) ? number : null;
+}
+function hasRegistrationLocation(location) {
+  return toFiniteRegistrationNumber(location?.latitude) !== null
+    && toFiniteRegistrationNumber(location?.longitude) !== null;
+}
+function formatRegistrationLocation(location) {
+  if (!hasRegistrationLocation(location)) {
+    return "Location missing";
+  }
+
+  const latitude = toFiniteRegistrationNumber(location.latitude);
+  const longitude = toFiniteRegistrationNumber(location.longitude);
+  const accuracyValue = toFiniteRegistrationNumber(location.accuracy);
+  const accuracy = accuracyValue !== null
+    ? ` · ±${Math.round(accuracyValue)}m`
+    : "";
+
+  return `${latitude.toFixed(5)}, ${longitude.toFixed(5)}${accuracy}`;
+}
+function registrationLocationMapUrl(location) {
+  if (!hasRegistrationLocation(location)) {
+    return "";
+  }
+
+  return `https://www.google.com/maps?q=${toFiniteRegistrationNumber(location.latitude)},${toFiniteRegistrationNumber(location.longitude)}`;
 }
 function AdminDashboard() {
   const { user, logout } = useAuth();
@@ -1298,7 +1334,7 @@ function UserApprovalsContent({
         <table className="w-full text-sm">
           <thead>
             <tr style={{ backgroundColor: "#FAFAFA" }}>
-              {["Customer", "Company", "Email", "Phone", "Email Status", "Registered", "Action"].map((h) => <th key={h} className="px-4 py-3 text-left text-xs border-b border-gray-100" style={{ color: BS_GRAY, fontWeight: 500 }}>
+              {["Customer", "Company", "Email", "Phone", "Email Status", "Registration Location", "Registered", "Action"].map((h) => <th key={h} className="px-4 py-3 text-left text-xs border-b border-gray-100" style={{ color: BS_GRAY, fontWeight: 500 }}>
                   {h}
                 </th>)}
             </tr>
@@ -1306,6 +1342,8 @@ function UserApprovalsContent({
           <tbody>
             {pendingUsers.map((pendingUser, i) => {
     const isUpdating = updatingUserId === pendingUser.id;
+    const hasLocation = hasRegistrationLocation(pendingUser.registrationLocation);
+    const canApprove = pendingUser.emailVerified && hasLocation;
     return <tr key={pendingUser.id} style={{ borderBottom: i < pendingUsers.length - 1 ? "1px solid #F3F4F6" : "none" }}>
                 <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>{pendingUser.name || "—"}</td>
                 <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{pendingUser.company || "—"}</td>
@@ -1320,11 +1358,25 @@ function UserApprovalsContent({
           fontWeight: 500
         }}
       >
-                    {pendingUser.emailVerified ? "Verified" : "Not verified"}
-                  </span>
+	                    {pendingUser.emailVerified ? "Verified" : "Not verified"}
+	                  </span>
+	                </td>
+                <td className="px-4 py-3.5 text-xs min-w-[190px]" style={{ color: BS_GRAY }}>
+                  {hasRegistrationLocation(pendingUser.registrationLocation) ? <a
+    href={registrationLocationMapUrl(pendingUser.registrationLocation)}
+    target="_blank"
+    rel="noopener noreferrer"
+    className="inline-flex items-center gap-1.5 hover:underline"
+    title={`IP: ${pendingUser.registrationLocation.ipAddress || "Unknown"}`}
+    style={{ color: BS_BLACK }}
+  >
+                      <MapPin size={11} />
+                      {formatRegistrationLocation(pendingUser.registrationLocation)}
+                      <ExternalLink size={11} />
+                    </a> : <span style={{ color: BS_MAROON, fontWeight: 500 }}>Missing</span>}
                 </td>
-                <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{formatDate(pendingUser.createdAt)}</td>
-                <td className="px-4 py-3.5">
+	                <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{formatDate(pendingUser.createdAt)}</td>
+	                <td className="px-4 py-3.5">
                   {isUpdating ? <span
     className="inline-flex items-center gap-1.5 text-xs"
     style={{ color: BS_GRAY, fontWeight: 500 }}
@@ -1334,10 +1386,12 @@ function UserApprovalsContent({
                     </span> : <div className="flex items-center gap-2">
                     <button
           onClick={() => onApprove(pendingUser.id)}
-          disabled={!pendingUser.emailVerified}
-          title={pendingUser.emailVerified
-            ? "Approve customer"
-            : "Email verification is required before approval"}
+          disabled={!canApprove}
+          title={!pendingUser.emailVerified
+            ? "Email verification is required before approval"
+            : !hasLocation
+              ? "Registration location is required before approval"
+              : "Approve customer"}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80 disabled:opacity-50"
           style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 500 }}
         >
@@ -1355,7 +1409,7 @@ function UserApprovalsContent({
               </tr>;
   })}
             {pendingUsers.length === 0 && <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
+                <td colSpan={8} className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
                   No pending customer approvals.
                 </td>
               </tr>}
