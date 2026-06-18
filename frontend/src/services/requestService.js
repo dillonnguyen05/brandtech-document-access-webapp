@@ -35,10 +35,10 @@ function formatRequestDate(value) {
   return String(value);
 }
 
-function sortByCreatedAtDesc(a, b) {
+function sortByCreatedAtAsc(a, b) {
   const aMillis = typeof a.createdAt?.toMillis === "function" ? a.createdAt.toMillis() : 0;
   const bMillis = typeof b.createdAt?.toMillis === "function" ? b.createdAt.toMillis() : 0;
-  return bMillis - aMillis;
+  return aMillis - bMillis;
 }
 
 function mapRequestSnapshot(snapshot) {
@@ -52,13 +52,13 @@ function mapRequestSnapshot(snapshot) {
         dateRequested: formatRequestDate(data.createdAt)
       };
     })
-    .sort(sortByCreatedAtDesc);
+    .sort(sortByCreatedAtAsc);
 }
 
 export function listenToAccessRequests(onRequests, onError) {
   const requestsQuery = query(
     collection(db, "accessRequests"),
-    orderBy("createdAt", "desc")
+    orderBy("createdAt", "asc")
   );
 
   return onSnapshot(

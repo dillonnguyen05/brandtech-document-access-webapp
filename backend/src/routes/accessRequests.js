@@ -185,7 +185,7 @@ async function updateAccessDecision(req, action) {
 router.get("/", async (req, res) => {
   const snapshot = await adminDb
     .collection("accessRequests")
-    .orderBy("createdAt", "desc")
+    .orderBy("createdAt", "asc")
     .get();
 
   const requests = snapshot.docs.map(formatRequestSnapshot);
