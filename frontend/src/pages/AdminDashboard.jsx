@@ -64,7 +64,8 @@ function StatusBadge({ status }) {
     revoked: { bg: "rgba(138,42,43,0.12)", color: BS_MAROON, label: "Revoked" },
     "Access Granted": { bg: "rgba(34,197,94,0.12)", color: "#166534", label: "Access Granted" },
     "Access Denied": { bg: "rgba(138,42,43,0.12)", color: BS_MAROON, label: "Access Denied" },
-    "Access Revoked": { bg: "rgba(138,42,43,0.12)", color: BS_MAROON, label: "Access Revoked" }
+    "Access Revoked": { bg: "rgba(138,42,43,0.12)", color: BS_MAROON, label: "Access Revoked" },
+    "Document Downloaded": { bg: "rgba(14,165,233,0.12)", color: "#0369A1", label: "Downloaded" }
   };
   const cfg = map[status] || { bg: "#F3F4F6", color: BS_GRAY, label: status };
   return <span
@@ -269,21 +270,27 @@ function AdminDashboard() {
   useEffect(() => {
     let active = true;
 
-    loadAuditLog()
-      .then((apiAuditLog) => {
-        if (!active) return;
-        setAuditLog(apiAuditLog);
-        setAuditLoadError("");
-      })
-      .catch((error) => {
-        console.error(error);
-        if (active) {
-          setAuditLoadError(error.message || "Unable to load the audit log.");
-        }
-      });
+    const loadLatestAuditLog = () => {
+      loadAuditLog()
+        .then((apiAuditLog) => {
+          if (!active) return;
+          setAuditLog(apiAuditLog);
+          setAuditLoadError("");
+        })
+        .catch((error) => {
+          console.error(error);
+          if (active) {
+            setAuditLoadError(error.message || "Unable to load the audit log.");
+          }
+        });
+    };
+
+    loadLatestAuditLog();
+    const intervalId = window.setInterval(loadLatestAuditLog, 15e3);
 
     return () => {
       active = false;
+      window.clearInterval(intervalId);
     };
   }, []);
   useEffect(() => {
@@ -1789,7 +1796,7 @@ function AuditContent({ auditLog, error, onRevoke, onGrant, requests }) {
         <table className="w-full text-sm">
           <thead>
             <tr style={{ backgroundColor: "#FAFAFA" }}>
-              {["Customer", "Company", "Document", "Action", "Admin", "Timestamp", "Action"].map((h, i) => <th key={`${h}${i}`} className="px-4 py-3 text-left text-xs border-b border-gray-100" style={{ color: BS_GRAY, fontWeight: 500 }}>
+              {["Customer", "Company", "Document", "Action", "Performed By", "Timestamp", "Action"].map((h, i) => <th key={`${h}${i}`} className="px-4 py-3 text-left text-xs border-b border-gray-100" style={{ color: BS_GRAY, fontWeight: 500 }}>
                   {h}
                 </th>)}
             </tr>
@@ -1807,7 +1814,7 @@ function AuditContent({ auditLog, error, onRevoke, onGrant, requests }) {
                   <td className="px-4 py-3.5">
                     <StatusBadge status={entry.action} />
                   </td>
-                  <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{entry.admin}</td>
+                  <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{entry.admin || entry.customer || "—"}</td>
                   <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{entry.timestamp}</td>
                   <td className="px-4 py-3.5">
                     {canRevoke ? <button

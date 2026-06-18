@@ -457,6 +457,7 @@ documentAccessRouter.get("/:documentId/download", async (req, res) => {
     .collection("documents")
     .doc(req.params.documentId);
   const documentSnapshot = await documentRef.get();
+  let approvedRequestSnapshot = null;
 
   if (!documentSnapshot.exists) {
     throw createRouteError(404, "Document not found.");
@@ -477,12 +478,12 @@ documentAccessRouter.get("/:documentId/download", async (req, res) => {
       throw createRouteError(403, "This document is not assigned to your account.");
     }
 
-    const requestSnapshot = await adminDb
+    approvedRequestSnapshot = await adminDb
       .collection("accessRequests")
       .doc(`${req.auth.uid}_${documentRef.id}`)
       .get();
 
-    if (!requestSnapshot.exists || requestSnapshot.data().status !== "approved") {
+    if (!approvedRequestSnapshot.exists || approvedRequestSnapshot.data().status !== "approved") {
       throw createRouteError(
         403,
         "Approved access is required to open this document."
@@ -514,6 +515,30 @@ documentAccessRouter.get("/:documentId/download", async (req, res) => {
     responseDisposition: `${disposition}; filename="${fileName}"`,
     responseType: document.fileType || "application/octet-stream"
   });
+
+  if (req.userProfile.role === "customer" && disposition === "attachment") {
+    const approvedRequest = approvedRequestSnapshot?.data() || {};
+    const auditRef = adminDb.collection("auditLog").doc();
+
+    await auditRef.set({
+      customerId: req.auth.uid,
+      customer: req.userProfile.name || req.auth.email || req.userProfile.email || "",
+      company: req.userProfile.company || "",
+      documentId: documentRef.id,
+      document: document.title || document.fileName || "Untitled Document",
+      action: "Document Downloaded",
+      adminId: "",
+      admin: "",
+      adminEmail: "",
+      requestId: approvedRequestSnapshot?.id || `${req.auth.uid}_${documentRef.id}`,
+      fileName,
+      fileType: document.fileType || "",
+      downloadUrlExpiresAt: new Date(Date.now() + SIGNED_URL_LIFETIME_MS),
+      accessReviewedBy: approvedRequest.reviewedBy || "",
+      accessReviewedByName: approvedRequest.reviewedByName || "",
+      createdAt: FieldValue.serverTimestamp()
+    });
+  }
 
   res.status(200).json({
     url,
