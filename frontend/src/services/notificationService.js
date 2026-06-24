@@ -7,6 +7,9 @@ import {
 import { db } from "../firebase/firebaseConfig";
 import { apiRequest } from "./apiClient.js";
 
+/**
+ * Converts Firestore notification timestamps into user-friendly labels.
+ */
 function formatNotificationDate(value) {
   if (!value) return "Just now";
 
@@ -23,12 +26,18 @@ function formatNotificationDate(value) {
   return String(value);
 }
 
+/**
+ * Sorts notifications so newest updates appear first.
+ */
 function sortByCreatedAtDesc(a, b) {
   const aMillis = typeof a.createdAt?.toMillis === "function" ? a.createdAt.toMillis() : 0;
   const bMillis = typeof b.createdAt?.toMillis === "function" ? b.createdAt.toMillis() : 0;
   return bMillis - aMillis;
 }
 
+/**
+ * Maps a Firestore snapshot into dashboard notification objects.
+ */
 function mapNotificationSnapshot(snapshot) {
   return snapshot.docs
     .map((notificationSnapshot) => {
@@ -43,6 +52,9 @@ function mapNotificationSnapshot(snapshot) {
     .sort(sortByCreatedAtDesc);
 }
 
+/**
+ * Opens a realtime listener for notifications owned by one user.
+ */
 export function listenToUserNotifications(userId, onNotifications, onError) {
   const notificationsQuery = query(
     collection(db, "notifications"),
@@ -56,6 +68,9 @@ export function listenToUserNotifications(userId, onNotifications, onError) {
   );
 }
 
+/**
+ * Marks every unread notification in the supplied list as read.
+ */
 export async function markNotificationsRead(notifications) {
   const unreadNotifications = notifications.filter((notification) => !notification.read);
   if (unreadNotifications.length === 0) return;
@@ -68,6 +83,9 @@ export async function markNotificationsRead(notifications) {
   });
 }
 
+/**
+ * Marks one notification as read through Express.
+ */
 export function markNotificationRead(notificationId) {
   return apiRequest(
     `/api/notifications/${encodeURIComponent(notificationId)}/read`,
@@ -77,6 +95,9 @@ export function markNotificationRead(notificationId) {
   );
 }
 
+/**
+ * Deletes one notification through Express.
+ */
 export function dismissNotification(notificationId) {
   return apiRequest(
     `/api/notifications/${encodeURIComponent(notificationId)}`,

@@ -5,16 +5,25 @@ import { adminDb } from "../firebaseAdmin.js";
 
 const router = express.Router();
 
+/**
+ * Creates route errors with HTTP status codes for the shared Express error handler.
+ */
 function createRouteError(status, message) {
   const error = new Error(message);
   error.status = status;
   return error;
 }
 
+/**
+ * Trims incoming form fields before validation and storage.
+ */
 function cleanText(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+/**
+ * Validates latitude and longitude values from browser geolocation.
+ */
 function parseCoordinate(value, label, min, max) {
   const number = Number(value);
 
@@ -25,6 +34,9 @@ function parseCoordinate(value, label, min, max) {
   return number;
 }
 
+/**
+ * Validates the browser-reported location accuracy.
+ */
 function parseAccuracy(value) {
   const number = Number(value);
 
@@ -35,6 +47,9 @@ function parseAccuracy(value) {
   return number;
 }
 
+/**
+ * Converts the browser geolocation timestamp into a Date for Firestore.
+ */
 function parseCapturedAt(value) {
   const timestamp = Number(value);
 
@@ -47,6 +62,9 @@ function parseCapturedAt(value) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+/**
+ * Requires location data and normalizes it before saving a customer profile.
+ */
 function requireRegistrationLocation(location) {
   if (!location || typeof location !== "object") {
     throw createRouteError(
@@ -64,6 +82,7 @@ function requireRegistrationLocation(location) {
   };
 }
 
+// Creates the Firestore customer profile after Firebase Auth account creation.
 router.post("/customer-profile", async (req, res) => {
   const uid = req.auth?.uid;
   const email = req.auth?.email || cleanText(req.body.email);

@@ -6,6 +6,7 @@ import { adminDb } from "../firebaseAdmin.js";
 const router = express.Router();
 const customerAccessRequestsRouter = express.Router();
 
+// Centralizes how each admin decision changes status, notifications, and audit labels.
 const decisionConfig = {
   approve: {
     allowedStatuses: ["pending"],
@@ -43,12 +44,18 @@ const decisionConfig = {
   }
 };
 
+/**
+ * Creates route errors with HTTP status codes for the shared Express error handler.
+ */
 function createRouteError(status, message) {
   const error = new Error(message);
   error.status = status;
   return error;
 }
 
+/**
+ * Reads and validates the optional/required admin decision message.
+ */
 function getDecisionMessage(req, config) {
   const message = typeof req.body.message === "string"
     ? req.body.message.trim()
@@ -65,12 +72,18 @@ function getDecisionMessage(req, config) {
   return message;
 }
 
+/**
+ * Converts Firestore Timestamp values into ISO strings for React.
+ */
 function timestampToIso(value) {
   return typeof value?.toDate === "function"
     ? value.toDate().toISOString()
     : null;
 }
 
+/**
+ * Shapes an access request document for the admin/customer dashboards.
+ */
 function formatRequestSnapshot(requestSnapshot) {
   const data = requestSnapshot.data();
 
@@ -82,6 +95,9 @@ function formatRequestSnapshot(requestSnapshot) {
   };
 }
 
+/**
+ * Normalizes the current admin identity for audit records.
+ */
 function adminIdentity(req) {
   return {
     id: req.auth.uid,
@@ -90,6 +106,9 @@ function adminIdentity(req) {
   };
 }
 
+/**
+ * Checks whether a document's target rules include this customer or company.
+ */
 function documentTargetsCustomer(document, customerId, company) {
   if (!document.targetType || document.targetType === "all") {
     return true;
@@ -106,6 +125,9 @@ function documentTargetsCustomer(document, customerId, company) {
   return false;
 }
 
+/**
+ * Applies approve, deny, grant, or revoke decisions inside one Firestore transaction.
+ */
 async function updateAccessDecision(req, action) {
   const config = decisionConfig[action];
   const { requestId } = req.params;
@@ -182,6 +204,7 @@ async function updateAccessDecision(req, action) {
   return config.nextStatus;
 }
 
+// Lists access requests oldest first so admins can review the queue fairly.
 router.get("/", async (req, res) => {
   const snapshot = await adminDb
     .collection("accessRequests")
@@ -193,6 +216,7 @@ router.get("/", async (req, res) => {
   res.status(200).json({ requests });
 });
 
+// Approves a pending customer request for a document.
 router.post("/:requestId/approve", async (req, res) => {
   const status = await updateAccessDecision(req, "approve");
 
@@ -203,6 +227,7 @@ router.post("/:requestId/approve", async (req, res) => {
   });
 });
 
+// Denies a pending request and requires an admin message for the customer.
 router.post("/:requestId/deny", async (req, res) => {
   const status = await updateAccessDecision(req, "deny");
 
@@ -213,6 +238,7 @@ router.post("/:requestId/deny", async (req, res) => {
   });
 });
 
+// Restores access after a denial or revocation.
 router.post("/:requestId/grant", async (req, res) => {
   const status = await updateAccessDecision(req, "grant");
 
@@ -223,6 +249,7 @@ router.post("/:requestId/grant", async (req, res) => {
   });
 });
 
+// Revokes a previously approved document access request.
 router.post("/:requestId/revoke", async (req, res) => {
   const status = await updateAccessDecision(req, "revoke");
 
@@ -233,6 +260,7 @@ router.post("/:requestId/revoke", async (req, res) => {
   });
 });
 
+// Lets active customers request access to documents assigned to them or their company.
 customerAccessRequestsRouter.post("/", async (req, res) => {
   const documentId = typeof req.body.documentId === "string"
     ? req.body.documentId.trim()

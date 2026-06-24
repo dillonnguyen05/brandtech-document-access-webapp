@@ -7,6 +7,9 @@ import {
 import { db } from "../firebase/firebaseConfig";
 import { apiRequest } from "./apiClient.js";
 
+/**
+ * Opens a realtime listener for active customer profiles used by admin targeting controls.
+ */
 export function listenToActiveCustomers(onCustomers, onError) {
   const customersQuery = query(
     collection(db, "users"),
@@ -30,11 +33,17 @@ export function listenToActiveCustomers(onCustomers, onError) {
   );
 }
 
+/**
+ * Loads pending customer registration requests for admin approval.
+ */
 export async function loadPendingCustomers() {
   const result = await apiRequest("/api/admin/users/pending");
   return result.users;
 }
 
+/**
+ * Sends a shared admin account decision request.
+ */
 function reviewCustomer(userId, action, message = "") {
   return apiRequest(
     `/api/admin/users/${encodeURIComponent(userId)}/${action}`,
@@ -45,14 +54,23 @@ function reviewCustomer(userId, action, message = "") {
   );
 }
 
+/**
+ * Approves a pending customer account.
+ */
 export function approveCustomer(userId) {
   return reviewCustomer(userId, "approve");
 }
 
+/**
+ * Denies a pending customer account with an admin message.
+ */
 export function denyCustomer(userId, message) {
   return reviewCustomer(userId, "deny", message);
 }
 
+/**
+ * Revokes an active customer account with an admin message.
+ */
 export function revokeCustomer(userId, message) {
   return reviewCustomer(userId, "revoke", message);
 }

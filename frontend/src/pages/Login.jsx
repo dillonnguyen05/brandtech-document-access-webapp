@@ -6,6 +6,11 @@ import logo from "../imports/brandtech.jpg";
 const BS_BLACK = "#101820";
 const BS_GOLD = "#F2A900";
 const BS_GRAY = "#565A5C";
+
+/**
+ * Sign-in page for admins and customers.
+ * The AuthContext decides the final destination based on the user's Firestore role.
+ */
 function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -14,6 +19,10 @@ function Login() {
   const [loading, setLoading] = useState(false);
   const { login } = useAuth();
   const navigate = useNavigate();
+
+  /**
+   * Submits credentials to Firebase Auth through AuthContext and redirects by role.
+   */
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");

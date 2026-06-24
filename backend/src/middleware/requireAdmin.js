@@ -1,5 +1,9 @@
 import { adminDb } from "../firebaseAdmin.js";
 
+/**
+ * Allows the request to continue only when the signed-in user has an active
+ * Firestore profile with role "admin".
+ */
 async function requireAdmin(req, res, next) {
   const uid = req.auth?.uid;
 

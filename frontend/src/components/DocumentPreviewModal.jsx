@@ -9,22 +9,34 @@ const BS_BLACK = "#101820";
 const BS_GOLD = "#F2A900";
 const BS_GRAY = "#565A5C";
 
+/**
+ * Checks whether the stored document can be displayed as an image preview.
+ */
 function isImage(document) {
   const type = (document?.fileType || "").toLowerCase();
   return type.startsWith("image/");
 }
 
+/**
+ * Checks whether the stored document can be displayed in the browser PDF viewer.
+ */
 function isPdf(document) {
   const type = (document?.fileType || "").toLowerCase();
   const name = (document?.fileName || "").toLowerCase();
   return type.includes("pdf") || name.endsWith(".pdf");
 }
 
+/**
+ * Identifies Office files that should be downloaded instead of embedded.
+ */
 function isOfficeDocument(document) {
   const name = (document?.fileName || "").toLowerCase();
   return [".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"].some((ext) => name.endsWith(ext));
 }
 
+/**
+ * Loads a short-lived signed URL and renders either a preview or a download prompt.
+ */
 function DocumentPreviewContent({ document, onClose }) {
   const previewable = isPdf(document) || isImage(document);
   const [previewUrl, setPreviewUrl] = useState("");
@@ -60,6 +72,9 @@ function DocumentPreviewContent({ document, onClose }) {
     };
   }, [document.id, previewable]);
 
+  /**
+   * Requests a secure download URL from Express and opens the browser download.
+   */
   const handleDownload = async () => {
     setDownloading(true);
     setPreviewError("");
@@ -145,6 +160,9 @@ function DocumentPreviewContent({ document, onClose }) {
     </div>;
 }
 
+/**
+ * Modal wrapper that resets preview state whenever a different document is opened.
+ */
 function DocumentPreviewModal({ document, onClose }) {
   if (!document) return null;
 

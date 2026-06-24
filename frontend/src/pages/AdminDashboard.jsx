@@ -56,6 +56,10 @@ const BS_GOLD = "#F2A900";
 const BS_MAROON = "#8A2A2B";
 const BS_GRAY = "#565A5C";
 const BS_LIGHT = "#F7F8F9";
+
+/**
+ * Renders consistent status pills for requests and audit actions.
+ */
 function StatusBadge({ status }) {
   const map = {
     pending: { bg: "rgba(242,169,0,0.12)", color: "#A37200", label: "Pending" },
@@ -84,6 +88,10 @@ const NAV = [
   { key: "settings", label: "Settings", icon: Settings },
   { key: "profile", label: "Profile", icon: UserCircle }
 ];
+
+/**
+ * Formats Firestore/ISO dates for compact table display.
+ */
 function formatDate(value) {
   if (!value) return "—";
   const date = typeof value.toDate === "function"
@@ -100,6 +108,10 @@ function formatDate(value) {
     year: "numeric"
   });
 }
+
+/**
+ * Converts optional registration-location values into usable numbers.
+ */
 function toFiniteRegistrationNumber(value) {
   if (value === null || value === undefined || value === "") {
     return null;
@@ -109,10 +121,18 @@ function toFiniteRegistrationNumber(value) {
 
   return Number.isFinite(number) ? number : null;
 }
+
+/**
+ * Checks if a registration has valid latitude and longitude.
+ */
 function hasRegistrationLocation(location) {
   return toFiniteRegistrationNumber(location?.latitude) !== null
     && toFiniteRegistrationNumber(location?.longitude) !== null;
 }
+
+/**
+ * Creates the human-readable coordinate text shown in user approvals.
+ */
 function formatRegistrationLocation(location) {
   if (!hasRegistrationLocation(location)) {
     return "Location missing";
@@ -127,6 +147,10 @@ function formatRegistrationLocation(location) {
 
   return `${latitude.toFixed(5)}, ${longitude.toFixed(5)}${accuracy}`;
 }
+
+/**
+ * Builds a Google Maps URL for the captured registration coordinates.
+ */
 function registrationLocationMapUrl(location) {
   if (!hasRegistrationLocation(location)) {
     return "";
@@ -134,6 +158,10 @@ function registrationLocationMapUrl(location) {
 
   return `https://www.google.com/maps?q=${toFiniteRegistrationNumber(location.latitude)},${toFiniteRegistrationNumber(location.longitude)}`;
 }
+
+/**
+ * Main admin shell that loads Express/Firebase data and routes between dashboard sections.
+ */
 function AdminDashboard() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
@@ -142,6 +170,9 @@ function AdminDashboard() {
   const [profilePic, setProfilePic] = useState(null);
   const dropdownRef = useRef(null);
   useEffect(() => {
+    /**
+     * Closes the profile menu when the admin clicks outside it.
+     */
     function handleClickOutside(e) {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
         setProfileOpen(false);
@@ -185,6 +216,10 @@ function AdminDashboard() {
     new Set(activeCustomers.map((customer) => customer.company).filter(Boolean))
   ).sort((a, b) => a.localeCompare(b));
   const selectedTargetCustomer = activeCustomers.find((customer) => customer.id === uploadTargetCustomerId);
+
+  /**
+   * Reloads admin document metadata after upload, edit, or delete actions.
+   */
   const refreshDocuments = useCallback(async () => {
     try {
       const apiDocuments = await loadAdminDocuments();
@@ -195,6 +230,10 @@ function AdminDashboard() {
       setDocumentLoadError(error.message || "Unable to load uploaded documents.");
     }
   }, []);
+
+  /**
+   * Reloads audit rows after actions that create audit entries.
+   */
   const refreshAuditLog = useCallback(async () => {
     try {
       const apiAuditLog = await loadAuditLog();
@@ -205,6 +244,10 @@ function AdminDashboard() {
       setAuditLoadError(error.message || "Unable to load the audit log.");
     }
   }, []);
+
+  /**
+   * Reloads pending customer registrations from Express.
+   */
   const refreshPendingUsers = useCallback(async () => {
     try {
       const customers = await loadPendingCustomers();
@@ -215,6 +258,10 @@ function AdminDashboard() {
       setUserApprovalError(error.message || "Unable to load pending users.");
     }
   }, []);
+
+  /**
+   * Signs the admin out and returns to the login page.
+   */
   const handleLogout = () => {
     logout();
     navigate("/login");
@@ -225,6 +272,9 @@ function AdminDashboard() {
   useEffect(() => {
     let active = true;
 
+    /**
+     * Polls pending users so email verification changes show without a page reload.
+     */
     const loadPendingUsers = () => {
       loadPendingCustomers()
         .then((customers) => {
@@ -270,6 +320,9 @@ function AdminDashboard() {
   useEffect(() => {
     let active = true;
 
+    /**
+     * Polls audit log updates so completed approvals and downloads appear without a full refresh.
+     */
     const loadLatestAuditLog = () => {
       loadAuditLog()
         .then((apiAuditLog) => {
@@ -321,6 +374,10 @@ function AdminDashboard() {
 
     return unsubscribe;
   }, []);
+
+  /**
+   * Approves a pending document request and refreshes audit history.
+   */
   const approveRequest = async (id) => {
     const req = requests.find((r) => r.id === id);
     if (!req) return;
@@ -333,12 +390,20 @@ function AdminDashboard() {
       setRequestLoadError(error.message || "Unable to approve request.");
     }
   };
+
+  /**
+   * Opens the denial message modal for a document request.
+   */
   const denyRequest = (request) => {
     setAccessDecision({
       request,
       type: "deny"
     });
   };
+
+  /**
+   * Grants access again from an audit-log row after a denial or revocation.
+   */
   const grantAccess = async (requestId) => {
     const auditEntry = auditLog.find((a) => a.requestId === requestId && (a.action === "Access Denied" || a.action === "Access Revoked"));
     if (!auditEntry) return;
@@ -351,6 +416,10 @@ function AdminDashboard() {
       setRequestLoadError(error.message || "Unable to grant document access.");
     }
   };
+
+  /**
+   * Opens the revocation message modal for an approved document request.
+   */
   const revokeAccess = (requestId) => {
     const request = requests.find((item) => item.id === requestId);
     if (!request) return;
@@ -360,6 +429,10 @@ function AdminDashboard() {
       type: "revoke"
     });
   };
+
+  /**
+   * Sends a denial or revocation decision message to Express.
+   */
   const submitAccessDecision = async (message) => {
     if (!accessDecision) return;
 
@@ -386,6 +459,10 @@ function AdminDashboard() {
       throw error;
     }
   };
+
+  /**
+   * Uploads a document file and its target metadata through the Express API.
+   */
   const handleUpload = async (e) => {
     e.preventDefault();
     if (!uploadTitle) return;
@@ -444,6 +521,10 @@ function AdminDashboard() {
       setUploading(false);
     }
   };
+
+  /**
+   * Downloads the selected document through the signed-url service.
+   */
   const handleDownloadDocument = async (document) => {
     setDocumentActionError("");
 
@@ -454,6 +535,10 @@ function AdminDashboard() {
       setDocumentActionError(error.message || "Unable to download document.");
     }
   };
+
+  /**
+   * Saves document metadata changes and refreshes related admin tables.
+   */
   const handleUpdateDocument = async (documentId, documentData) => {
     setDocumentActionError("");
 
@@ -470,6 +555,10 @@ function AdminDashboard() {
       throw error;
     }
   };
+
+  /**
+   * Deletes a document plus related requests/notifications through Express.
+   */
   const handleDeleteDocument = async (document) => {
     const confirmed = window.confirm(
       `Delete "${document.title}"? This also removes its requests and notifications.`
@@ -493,6 +582,10 @@ function AdminDashboard() {
       setDocumentActionError(error.message || "Unable to delete document.");
     }
   };
+
+  /**
+   * Approves a pending customer registration.
+   */
   const approveUser = async (userId) => {
     setUpdatingUserId(userId);
     setUpdatingUserAction("approve");
@@ -514,6 +607,10 @@ function AdminDashboard() {
       setUpdatingUserAction("");
     }
   };
+
+  /**
+   * Sends a customer denial or revocation message to Express.
+   */
   const submitAccountDecision = async (message) => {
     if (!accountDecision) return;
 
@@ -886,6 +983,9 @@ function AdminDashboard() {
   />}
     </div>;
 }
+/**
+ * Sidebar navigation item for switching admin sections.
+ */
 function NavButton({
   label,
   Icon,
@@ -923,6 +1023,9 @@ function NavButton({
         </span>}
     </button>;
 }
+/**
+ * Admin overview cards and recent request table.
+ */
 function DashboardContent({
   requests,
   documents,
@@ -977,6 +1080,9 @@ function DashboardContent({
       </div>
     </div>;
 }
+/**
+ * Admin document management screen for upload, targeting, preview, edit, and delete.
+ */
 function DocumentsContent({
   documents,
   uploadTitle,
@@ -1247,6 +1353,9 @@ function DocumentsContent({
       </div>
     </div>;
 }
+/**
+ * Admin access-request queue wrapper.
+ */
 function RequestsContent({ requests, error, onApprove, onDeny }) {
   return <div className="bg-white rounded-xl border border-gray-100">
       <div className="px-5 py-4 border-b border-gray-100">
@@ -1259,6 +1368,9 @@ function RequestsContent({ requests, error, onApprove, onDeny }) {
       <RequestsTable requests={requests} onApprove={onApprove} onDeny={onDeny} />
     </div>;
 }
+/**
+ * Reusable table for approving or denying pending document access requests.
+ */
 function RequestsTable({ requests, onApprove, onDeny }) {
   return <div className="overflow-x-auto">
       <table className="w-full text-sm">
@@ -1307,6 +1419,9 @@ function RequestsTable({ requests, onApprove, onDeny }) {
       </table>
     </div>;
 }
+/**
+ * Admin customer-approval table with email/location review and account decisions.
+ */
 function UserApprovalsContent({
   pendingUsers,
   activeCustomers,
@@ -1495,6 +1610,9 @@ function UserApprovalsContent({
     </div>
   </div>;
 }
+/**
+ * Two-step modal for deny/revoke account decisions that require a message.
+ */
 function AccountDecisionModal({
   customer,
   type,
@@ -1508,6 +1626,9 @@ function AccountDecisionModal({
   const [error, setError] = useState("");
   const trimmedMessage = message.trim();
 
+  /**
+   * Validates the account decision message before calling the parent submit handler.
+   */
   const handleContinue = async () => {
     if (!trimmedMessage) {
       setError("Enter a message explaining this decision.");
@@ -1641,6 +1762,9 @@ function AccountDecisionModal({
       </div>
     </div>;
 }
+/**
+ * Two-step modal for deny/revoke document access decisions that require a message.
+ */
 function DocumentAccessDecisionModal({
   request,
   type,
@@ -1654,6 +1778,9 @@ function DocumentAccessDecisionModal({
   const [error, setError] = useState("");
   const trimmedMessage = message.trim();
 
+  /**
+   * Validates the document-access decision message before calling the parent submit handler.
+   */
   const handleContinue = async () => {
     if (!trimmedMessage) {
       setError("Enter a message explaining this decision.");
@@ -1783,6 +1910,9 @@ function DocumentAccessDecisionModal({
       </div>
     </div>;
 }
+/**
+ * Audit-log view for account, request, document, and download activity.
+ */
 function AuditContent({ auditLog, error, onRevoke, onGrant, requests }) {
   return <div className="bg-white rounded-xl border border-gray-100">
       <div className="px-5 py-4 border-b border-gray-100">
@@ -1843,6 +1973,9 @@ function AuditContent({ auditLog, error, onRevoke, onGrant, requests }) {
       </div>
     </div>;
 }
+/**
+ * Modal form for editing document metadata and target audience.
+ */
 function DocumentEditModal({
   document,
   activeCustomers,
@@ -1861,12 +1994,19 @@ function DocumentEditModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
+  /**
+   * Updates one field in the document edit form.
+   */
   const update = (field) => (event) => {
     setForm((previous) => ({
       ...previous,
       [field]: event.target.value
     }));
   };
+
+  /**
+   * Sends edited document metadata back to the admin dashboard handler.
+   */
   const handleSubmit = async (event) => {
     event.preventDefault();
     setSaving(true);
@@ -1967,6 +2107,9 @@ function DocumentEditModal({
       </form>
     </div>;
 }
+/**
+ * Admin settings page placeholder for account and security preferences.
+ */
 function SettingsContent({ user }) {
   const [autoCompanies, setAutoCompanies] = useState(["BrandTech Solutions", "Apex Industries"]);
   const [autoUsers, setAutoUsers] = useState(["james.walker@apexind.com"]);
@@ -2158,6 +2301,9 @@ function SettingsContent({ user }) {
 
     </div>;
 }
+/**
+ * Admin profile screen for local avatar preview and basic profile display.
+ */
 function AdminProfileContent({
   user,
   profilePic,
@@ -2167,6 +2313,10 @@ function AdminProfileContent({
   const [name, setName] = useState(user?.name || "");
   const [email, setEmail] = useState(user?.email || "");
   const [saved, setSaved] = useState(false);
+
+  /**
+   * Reads the selected profile image locally for an immediate avatar preview.
+   */
   const handlePicChange = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -2174,6 +2324,10 @@ function AdminProfileContent({
     reader.onload = (ev) => setProfilePic(ev.target?.result);
     reader.readAsDataURL(file);
   };
+
+  /**
+   * Shows a temporary saved state for the local profile form.
+   */
   const handleSave = () => {
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);

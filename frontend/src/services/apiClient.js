@@ -2,6 +2,9 @@ import { auth } from "../firebase/firebaseConfig";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
+/**
+ * Confirms the Express API is reachable from the frontend.
+ */
 export async function checkApiConnection() {
   const response = await fetch(`${API_URL}/api/health`);
 
@@ -12,6 +15,9 @@ export async function checkApiConnection() {
   return response.json();
 }
 
+/**
+ * Sends a JSON API request to Express with the current Firebase ID token.
+ */
 export async function apiRequest(path, options = {}) {
   const currentUser = auth.currentUser;
 
@@ -65,6 +71,9 @@ export async function apiRequest(path, options = {}) {
   return data;
 }
 
+/**
+ * Uploads FormData with XMLHttpRequest so the UI can display upload progress.
+ */
 export async function uploadApiFile(path, formData, onProgress) {
   const currentUser = auth.currentUser;
 

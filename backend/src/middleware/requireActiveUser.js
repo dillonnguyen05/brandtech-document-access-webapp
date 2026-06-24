@@ -1,5 +1,9 @@
 import { adminDb } from "../firebaseAdmin.js";
 
+/**
+ * Loads the signed-in user's Firestore profile and blocks inactive accounts.
+ * Customer accounts must also have a verified Firebase Auth email.
+ */
 async function requireActiveUser(req, res, next) {
   const uid = req.auth?.uid;
 

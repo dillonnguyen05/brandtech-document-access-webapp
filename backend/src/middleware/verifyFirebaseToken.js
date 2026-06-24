@@ -1,5 +1,9 @@
 import { adminAuth } from "../firebaseAdmin.js";
 
+/**
+ * Verifies the Firebase ID token sent by React in the Authorization header.
+ * On success, the decoded Firebase user identity is attached to req.auth.
+ */
 async function verifyFirebaseToken(req, res, next) {
   const authorization = req.get("authorization");
 

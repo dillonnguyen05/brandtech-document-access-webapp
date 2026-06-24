@@ -19,6 +19,7 @@ const ALLOWED_EXTENSIONS = new Set([
 ]);
 const ALLOWED_TARGET_TYPES = new Set(["all", "company", "customer"]);
 
+// Stores uploads in memory briefly so Express can validate and pass them to Firebase Storage.
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
@@ -44,26 +45,41 @@ const upload = multer({
 const router = express.Router();
 const documentAccessRouter = express.Router();
 
+/**
+ * Creates route errors with HTTP status codes for the shared Express error handler.
+ */
 function createRouteError(status, message) {
   const error = new Error(message);
   error.status = status;
   return error;
 }
 
+/**
+ * Trims text fields coming from multipart form data.
+ */
 function cleanText(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+/**
+ * Removes risky characters before using a name in Storage paths or download headers.
+ */
 function safeFileName(fileName) {
   return fileName.replace(/[^a-zA-Z0-9._-]/g, "-");
 }
 
+/**
+ * Converts Firestore Timestamp values into ISO strings for React.
+ */
 function timestampToIso(value) {
   return typeof value?.toDate === "function"
     ? value.toDate().toISOString()
     : null;
 }
 
+/**
+ * Removes private Storage fields before sending document metadata to the frontend.
+ */
 function formatDocumentSnapshot(documentSnapshot) {
   const data = documentSnapshot.data();
   const {
@@ -80,6 +96,9 @@ function formatDocumentSnapshot(documentSnapshot) {
   };
 }
 
+/**
+ * Checks whether a document's target rules include this customer or company.
+ */
 function documentTargetsCustomer(document, customerId, company) {
   if (!document.targetType || document.targetType === "all") {
     return true;
@@ -96,6 +115,9 @@ function documentTargetsCustomer(document, customerId, company) {
   return false;
 }
 
+/**
+ * Validates who a document is assigned to before creating or updating metadata.
+ */
 async function validateTarget(body) {
   const targetType = cleanText(body.targetType) || "all";
 
@@ -178,6 +200,9 @@ async function validateTarget(body) {
   };
 }
 
+/**
+ * Removes old public download tokens so documents only use short-lived signed URLs.
+ */
 async function revokeLegacyDownloadLink(documentSnapshot) {
   const document = documentSnapshot.data();
 
@@ -205,6 +230,9 @@ async function revokeLegacyDownloadLink(documentSnapshot) {
   });
 }
 
+/**
+ * Normalizes the current admin identity for audit records.
+ */
 function adminIdentity(req) {
   return {
     id: req.auth.uid,
@@ -213,6 +241,7 @@ function adminIdentity(req) {
   };
 }
 
+// Lists admin-visible document metadata and cleans up legacy public download links.
 router.get("/", async (req, res) => {
   const snapshot = await adminDb
     .collection("documents")
@@ -226,6 +255,7 @@ router.get("/", async (req, res) => {
   });
 });
 
+// Uploads a file to Storage, saves its metadata in Firestore, and writes an audit entry.
 router.post("/", upload.single("file"), async (req, res) => {
   if (!req.file) {
     throw createRouteError(400, "Please select a file.");
@@ -306,6 +336,7 @@ router.post("/", upload.single("file"), async (req, res) => {
   }
 });
 
+// Updates document title/category/targeting metadata without replacing the stored file.
 router.patch("/:documentId", async (req, res) => {
   const documentRef = adminDb
     .collection("documents")
@@ -362,6 +393,7 @@ router.patch("/:documentId", async (req, res) => {
   });
 });
 
+// Deletes document metadata, Storage file, related requests, related notifications, and audits it.
 router.delete("/:documentId", async (req, res) => {
   const documentRef = adminDb
     .collection("documents")
@@ -423,6 +455,7 @@ router.delete("/:documentId", async (req, res) => {
   });
 });
 
+// Lists documents the current user can see; admins see all documents.
 documentAccessRouter.get("/", async (req, res) => {
   if (req.userProfile.role === "admin") {
     const snapshot = await adminDb
@@ -452,6 +485,7 @@ documentAccessRouter.get("/", async (req, res) => {
   res.status(200).json({ documents });
 });
 
+// Returns a short-lived signed URL for preview/download and logs customer downloads.
 documentAccessRouter.get("/:documentId/download", async (req, res) => {
   const documentRef = adminDb
     .collection("documents")

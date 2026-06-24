@@ -2,11 +2,17 @@ import { apiRequest, uploadApiFile } from "./apiClient.js";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
 
+/**
+ * Converts byte counts into MB labels for document tables.
+ */
 function formatFileSize(bytes) {
   if (!bytes) return "—";
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/**
+ * Formats document createdAt values for display in the UI.
+ */
 function formatUploadDate(value) {
   if (!value) return "—";
 
@@ -23,6 +29,9 @@ function formatUploadDate(value) {
   });
 }
 
+/**
+ * Builds the admin/customer label that explains who a document targets.
+ */
 function formatTargetLabel(data) {
   if (data.targetType === "customer") {
     return data.targetCustomerName || data.targetCustomer || "Specific customer";
@@ -35,6 +44,9 @@ function formatTargetLabel(data) {
   return data.targetCustomer || "All Customers";
 }
 
+/**
+ * Normalizes document records returned by Express into the shape the dashboards expect.
+ */
 function formatDocument(document) {
   return {
     ...document,
@@ -48,6 +60,9 @@ function formatDocument(document) {
   };
 }
 
+/**
+ * Validates and uploads a new admin document through the Express document API.
+ */
 export async function uploadDocument(file, documentData, onProgress) {
   if (!file) {
     throw new Error("Please select a file.");
@@ -76,16 +91,25 @@ export async function uploadDocument(file, documentData, onProgress) {
   return formatDocument(result.document);
 }
 
+/**
+ * Loads all documents for admin management.
+ */
 export async function loadAdminDocuments() {
   const result = await apiRequest("/api/admin/documents");
   return result.documents.map(formatDocument);
 }
 
+/**
+ * Loads documents visible to the signed-in customer.
+ */
 export async function loadCustomerDocuments() {
   const result = await apiRequest("/api/documents");
   return result.documents.map(formatDocument);
 }
 
+/**
+ * Updates document metadata and targeting rules.
+ */
 export async function updateDocument(documentId, documentData) {
   const result = await apiRequest(
     `/api/admin/documents/${encodeURIComponent(documentId)}`,
@@ -98,6 +122,9 @@ export async function updateDocument(documentId, documentData) {
   return formatDocument(result.document);
 }
 
+/**
+ * Deletes a document, its Storage file, related requests, and related notifications through Express.
+ */
 export function deleteDocument(documentId) {
   return apiRequest(
     `/api/admin/documents/${encodeURIComponent(documentId)}`,
@@ -107,6 +134,9 @@ export function deleteDocument(documentId) {
   );
 }
 
+/**
+ * Requests a short-lived signed URL for previewing or downloading a document.
+ */
 export async function getDocumentUrl(documentId, disposition = "attachment") {
   const query = new URLSearchParams({ disposition });
   const result = await apiRequest(
@@ -116,6 +146,9 @@ export async function getDocumentUrl(documentId, disposition = "attachment") {
   return result.url;
 }
 
+/**
+ * Creates a temporary anchor element to start the browser download.
+ */
 export async function downloadDocument(document) {
   const url = await getDocumentUrl(document.id, "attachment");
   const link = window.document.createElement("a");

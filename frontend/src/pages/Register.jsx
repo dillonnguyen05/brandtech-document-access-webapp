@@ -18,6 +18,11 @@ const COUNTRY_CODES = [
   { id: "FR", label: "🇫🇷 +33", dialCode: "+33", name: "France", minLength: 9, maxLength: 9 },
   { id: "AU", label: "🇦🇺 +61", dialCode: "+61", name: "Australia", minLength: 9, maxLength: 9 }
 ];
+
+/**
+ * Requests browser geolocation for registration.
+ * The backend requires this location before creating the customer profile.
+ */
 function getRegistrationLocation() {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
@@ -45,6 +50,10 @@ function getRegistrationLocation() {
     );
   });
 }
+
+/**
+ * Customer registration page with email verification, phone validation, and location capture.
+ */
 function Register() {
   const [form, setForm] = useState({
     fullName: "",
@@ -67,7 +76,15 @@ function Register() {
   const selectedCountry = COUNTRY_CODES.find(
     (country) => country.id === form.phoneCountry
   ) || COUNTRY_CODES[0];
+
+  /**
+   * Creates a small setter for basic text inputs.
+   */
   const update = (field) => (e) => setForm((prev) => ({ ...prev, [field]: e.target.value }));
+
+  /**
+   * Changes country code rules and trims the typed phone number if the new country is shorter.
+   */
   const updatePhoneCountry = (e) => {
     const nextCountry = COUNTRY_CODES.find(
       (country) => country.id === e.target.value
@@ -79,6 +96,10 @@ function Register() {
       phone: prev.phone.slice(0, nextCountry.maxLength)
     }));
   };
+
+  /**
+   * Keeps phone input numeric and within the selected country's maximum length.
+   */
   const updatePhone = (e) => {
     const digitsOnly = e.target.value
       .replace(/\D/g, "")
@@ -86,6 +107,10 @@ function Register() {
 
     setForm((prev) => ({ ...prev, phone: digitsOnly }));
   };
+
+  /**
+   * Validates the registration form, captures location, then asks AuthContext to register.
+   */
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");

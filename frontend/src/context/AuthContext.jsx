@@ -16,12 +16,18 @@ import { createCustomerProfile } from "../services/registrationService.js";
 
 const AuthContext = createContext(null);
 
+/**
+ * Builds local auth errors that can flow through the same formatter as Firebase errors.
+ */
 function authError(message, code) {
   const error = new Error(message);
   error.code = code;
   return error;
 }
 
+/**
+ * Converts Firebase and app-specific auth failures into messages the UI can show.
+ */
 function formatFirebaseError(error) {
   switch (error.code) {
     case "auth/invalid-credential":
@@ -58,6 +64,10 @@ function formatFirebaseError(error) {
   }
 }
 
+/**
+ * Reads the Firestore user profile for the signed-in Firebase Auth account.
+ * This is where the client blocks pending, denied, revoked, or unverified customers.
+ */
 async function loadUserProfile(firebaseUser) {
   const userRef = doc(db, "users", firebaseUser.uid);
   const userSnap = await getDoc(userRef);
@@ -110,6 +120,9 @@ async function loadUserProfile(firebaseUser) {
   return profile;
 }
 
+/**
+ * Stores app-wide auth state and exposes login, register, and logout actions.
+ */
 function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -135,6 +148,9 @@ function AuthProvider({ children }) {
     return unsubscribe;
   }, []);
 
+  /**
+   * Signs in with Firebase Auth, then loads the Firestore role/status profile.
+   */
   async function login(email, password) {
     try {
       const credential = await signInWithEmailAndPassword(auth, email, password);
@@ -160,6 +176,9 @@ function AuthProvider({ children }) {
     }
   }
 
+  /**
+   * Creates a Firebase Auth customer, sends verification, then asks Express to create the profile.
+   */
   async function register(data) {
     let credential = null;
     let profileCreated = false;
@@ -210,6 +229,9 @@ function AuthProvider({ children }) {
     }
   }
 
+  /**
+   * Ends the Firebase session and clears the local profile.
+   */
   async function logout() {
     await signOut(auth);
     setUser(null);
@@ -220,6 +242,9 @@ function AuthProvider({ children }) {
     </AuthContext.Provider>;
 }
 
+/**
+ * Convenience hook so pages can read auth state without importing the raw context.
+ */
 function useAuth() {
   const context = useContext(AuthContext);
 

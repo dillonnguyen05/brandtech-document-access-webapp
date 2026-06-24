@@ -6,6 +6,11 @@ import Login from "./pages/Login";
 import Register from "./pages/Register";
 import AdminDashboard from "./pages/AdminDashboard";
 import CustomerDashboard from "./pages/CustomerDashboard";
+
+/**
+ * Keeps authenticated users on the correct side of the app.
+ * React Router handles the screen redirect, while Express still enforces API permissions.
+ */
 function ProtectedRoute({
   children,
   role
@@ -18,6 +23,10 @@ function ProtectedRoute({
   }
   return <>{children}</>;
 }
+
+/**
+ * Defines the public and protected routes for the single-page React app.
+ */
 function AppRoutes() {
   const { user, loading } = useAuth();
   if (loading) return <LoadingScreen />;
@@ -43,11 +52,19 @@ function AppRoutes() {
       <Route path="*" element={<Navigate to="/login" replace />} />
     </Routes>;
 }
+
+/**
+ * Shared loading state shown while Firebase restores the current auth session.
+ */
 function LoadingScreen() {
   return <div className="grid min-h-screen place-items-center bg-[#F7F8F9] text-sm font-medium text-[#565A5C]">
       Loading...
     </div>;
 }
+
+/**
+ * Wires together auth context, routing, and the startup Express health check.
+ */
 function App() {
   useEffect(() => {
     checkApiConnection()

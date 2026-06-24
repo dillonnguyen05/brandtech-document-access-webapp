@@ -8,6 +8,9 @@ import {
 import { db } from "../firebase/firebaseConfig";
 import { apiRequest } from "./apiClient.js";
 
+/**
+ * Creates or resubmits a customer document access request.
+ */
 export async function createAccessRequest(document) {
   if (!document?.id) {
     throw new Error("Select a document before requesting access.");
@@ -21,6 +24,9 @@ export async function createAccessRequest(document) {
   });
 }
 
+/**
+ * Formats Firestore request timestamps for request tables.
+ */
 function formatRequestDate(value) {
   if (!value) return "—";
 
@@ -35,12 +41,18 @@ function formatRequestDate(value) {
   return String(value);
 }
 
+/**
+ * Sorts access requests oldest first so admins handle the queue fairly.
+ */
 function sortByCreatedAtAsc(a, b) {
   const aMillis = typeof a.createdAt?.toMillis === "function" ? a.createdAt.toMillis() : 0;
   const bMillis = typeof b.createdAt?.toMillis === "function" ? b.createdAt.toMillis() : 0;
   return aMillis - bMillis;
 }
 
+/**
+ * Converts Firestore access request snapshots into UI-ready request objects.
+ */
 function mapRequestSnapshot(snapshot) {
   return snapshot.docs
     .map((requestSnapshot) => {
@@ -55,6 +67,9 @@ function mapRequestSnapshot(snapshot) {
     .sort(sortByCreatedAtAsc);
 }
 
+/**
+ * Opens a realtime listener for all access requests in admin view.
+ */
 export function listenToAccessRequests(onRequests, onError) {
   const requestsQuery = query(
     collection(db, "accessRequests"),
@@ -68,6 +83,9 @@ export function listenToAccessRequests(onRequests, onError) {
   );
 }
 
+/**
+ * Opens a realtime listener for one customer's access request history.
+ */
 export function listenToCustomerRequests(userId, onRequests, onError) {
   const requestsQuery = query(
     collection(db, "accessRequests"),
@@ -81,6 +99,9 @@ export function listenToCustomerRequests(userId, onRequests, onError) {
   );
 }
 
+/**
+ * Sends a shared admin decision request for approve, deny, grant, or revoke.
+ */
 function updateAccessRequest(requestId, action, message = "") {
   return apiRequest(
     `/api/admin/access-requests/${encodeURIComponent(requestId)}/${action}`,
@@ -91,18 +112,30 @@ function updateAccessRequest(requestId, action, message = "") {
   );
 }
 
+/**
+ * Approves a pending document access request.
+ */
 export function approveAccessRequest(requestId) {
   return updateAccessRequest(requestId, "approve");
 }
 
+/**
+ * Denies a pending document access request with an admin message.
+ */
 export function denyAccessRequest(requestId, message) {
   return updateAccessRequest(requestId, "deny", message);
 }
 
+/**
+ * Grants access again after a denied or revoked request.
+ */
 export function grantAccessRequest(requestId) {
   return updateAccessRequest(requestId, "grant");
 }
 
+/**
+ * Revokes a previously approved document access request with an admin message.
+ */
 export function revokeAccessRequest(requestId, message) {
   return updateAccessRequest(requestId, "revoke", message);
 }

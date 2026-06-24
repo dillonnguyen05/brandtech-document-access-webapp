@@ -22,14 +22,17 @@ const app = express();
 const port = Number(process.env.PORT) || 3000;
 const clientOrigin = process.env.CLIENT_ORIGIN || "http://localhost:5173";
 
+// Hide framework details and trust the first proxy when deployed behind hosting infrastructure.
 app.disable("x-powered-by");
 app.set("trust proxy", 1);
 
+// Allow the Vite frontend to call this API and parse normal JSON request bodies.
 app.use(cors({
   origin: clientOrigin
 }));
 app.use(express.json({ limit: "1mb" }));
 
+// Logs every frontend/backend request so it is obvious when React is reaching Express.
 app.use((req, res, next) => {
   const startedAt = Date.now();
 
@@ -44,6 +47,7 @@ app.use((req, res, next) => {
   next();
 });
 
+// Lightweight route used by the frontend startup check and manual browser testing.
 app.get("/api/health", (req, res) => {
   res.status(200).json({
     status: "ok",
@@ -51,11 +55,14 @@ app.get("/api/health", (req, res) => {
   });
 });
 
+// Registration starts with a Firebase token, then creates the customer profile through Express.
 app.use(
   "/api/register",
   verifyFirebaseToken,
   registrationRouter
 );
+
+// Admin-only routes are protected by Firebase token verification and role/status middleware.
 app.use(
   "/api/admin/users",
   verifyFirebaseToken,
@@ -80,6 +87,8 @@ app.use(
   requireAdmin,
   auditLogRouter
 );
+
+// Customer-facing routes require a valid, active account before document actions are allowed.
 app.use(
   "/api/documents",
   verifyFirebaseToken,
@@ -100,6 +109,7 @@ app.use(
   notificationsRouter
 );
 
+// Any URL not mounted above returns a consistent JSON 404 instead of an HTML Express page.
 app.use((req, res) => {
   res.status(404).json({
     error: "Route not found.",
@@ -108,6 +118,7 @@ app.use((req, res) => {
   });
 });
 
+// Central error handler converts thrown route errors into JSON responses for the frontend.
 app.use((error, req, res, next) => {
   console.error(error);
 
@@ -132,6 +143,7 @@ app.use((error, req, res, next) => {
   });
 });
 
+// Starts the local API server for frontend requests.
 app.listen(port, () => {
   console.log(`BrandTech API running at http://localhost:${port}`);
   console.log(`CORS enabled for ${clientOrigin}`);

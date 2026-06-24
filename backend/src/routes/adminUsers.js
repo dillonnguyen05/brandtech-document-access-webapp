@@ -5,18 +5,27 @@ import { adminAuth, adminDb } from "../firebaseAdmin.js";
 
 const router = express.Router();
 
+/**
+ * Creates route errors with HTTP status codes for the shared Express error handler.
+ */
 function createRouteError(status, message) {
   const error = new Error(message);
   error.status = status;
   return error;
 }
 
+/**
+ * Converts Firestore Timestamp values into ISO strings for React.
+ */
 function timestampToIso(value) {
   return typeof value?.toDate === "function"
     ? value.toDate().toISOString()
     : null;
 }
 
+/**
+ * Safely converts optional numeric fields like latitude and accuracy.
+ */
 function toFiniteNumber(value) {
   if (value === null || value === undefined || value === "") {
     return null;
@@ -27,6 +36,9 @@ function toFiniteNumber(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+/**
+ * Shapes stored browser-location data for the admin approval table.
+ */
 function formatRegistrationLocation(location) {
   if (!location || typeof location !== "object") {
     return null;
@@ -43,12 +55,18 @@ function formatRegistrationLocation(location) {
   };
 }
 
+/**
+ * Confirms that a customer registered with usable location coordinates.
+ */
 function hasRegistrationLocation(location) {
   return toFiniteNumber(location?.latitude) !== null
     && toFiniteNumber(location?.longitude) !== null
     && toFiniteNumber(location?.accuracy) !== null;
 }
 
+/**
+ * Validates the admin's denial or revocation message before saving it.
+ */
 function requireDecisionMessage(value) {
   const message = typeof value === "string" ? value.trim() : "";
 
@@ -63,6 +81,9 @@ function requireDecisionMessage(value) {
   return message;
 }
 
+/**
+ * Combines Firestore profile data with Firebase Auth verification data.
+ */
 function formatCustomerSnapshot(customerSnapshot, authUser) {
   const data = customerSnapshot.data();
 
@@ -78,6 +99,9 @@ function formatCustomerSnapshot(customerSnapshot, authUser) {
   };
 }
 
+/**
+ * Loads Firebase Auth users in batches because the Admin SDK caps getUsers calls.
+ */
 async function loadAuthUsers(userIds) {
   const authUsers = new Map();
 
@@ -95,6 +119,9 @@ async function loadAuthUsers(userIds) {
   return authUsers;
 }
 
+/**
+ * Normalizes the current admin identity for audit records.
+ */
 function adminIdentity(req) {
   return {
     id: req.auth.uid,
@@ -103,6 +130,9 @@ function adminIdentity(req) {
   };
 }
 
+/**
+ * Approves or denies a pending customer, then creates a notification and audit entry.
+ */
 async function reviewPendingCustomer(req, status) {
   const { userId } = req.params;
   const admin = adminIdentity(req);
@@ -219,6 +249,9 @@ async function reviewPendingCustomer(req, status) {
   });
 }
 
+/**
+ * Revokes an active customer and stores the message they will see at login.
+ */
 async function revokeActiveCustomer(req) {
   const { userId } = req.params;
   const decisionMessage = requireDecisionMessage(req.body.message);
@@ -283,6 +316,7 @@ async function revokeActiveCustomer(req) {
   });
 }
 
+// Returns the authenticated admin's basic identity for quick frontend checks.
 router.get("/me", (req, res) => {
   res.status(200).json({
     uid: req.auth.uid,
@@ -292,6 +326,7 @@ router.get("/me", (req, res) => {
   });
 });
 
+// Lists pending customers and refreshes email verification data from Firebase Auth.
 router.get("/pending", async (req, res) => {
   const snapshot = await adminDb
     .collection("users")
@@ -337,6 +372,7 @@ router.get("/pending", async (req, res) => {
   res.status(200).json({ users });
 });
 
+// Marks a pending customer as active after email verification and location checks pass.
 router.post("/:userId/approve", async (req, res) => {
   await reviewPendingCustomer(req, "approved");
 
@@ -347,6 +383,7 @@ router.post("/:userId/approve", async (req, res) => {
   });
 });
 
+// Marks a pending customer as denied and saves the admin's explanation.
 router.post("/:userId/deny", async (req, res) => {
   await reviewPendingCustomer(req, "denied");
 
@@ -357,6 +394,7 @@ router.post("/:userId/deny", async (req, res) => {
   });
 });
 
+// Marks an active customer as revoked and saves the admin's explanation.
 router.post("/:userId/revoke", async (req, res) => {
   await revokeActiveCustomer(req);
 

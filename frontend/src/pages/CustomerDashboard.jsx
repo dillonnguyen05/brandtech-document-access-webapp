@@ -40,6 +40,10 @@ const BS_GOLD = "#F2A900";
 const BS_MAROON = "#8A2A2B";
 const BS_GRAY = "#565A5C";
 const BS_LIGHT = "#F7F8F9";
+
+/**
+ * Renders customer-facing status pills for document requests.
+ */
 function StatusBadge({ status }) {
   const map = {
     pending: { bg: "rgba(242,169,0,0.12)", color: "#A37200", label: "Pending Review", icon: <Clock size={11} /> },
@@ -64,6 +68,10 @@ const NAV = [
   { key: "profile", label: "Profile", icon: User },
   { key: "settings", label: "Settings", icon: Settings }
 ];
+
+/**
+ * Mirrors backend targeting rules so the UI only shows relevant documents.
+ */
 function documentTargetsCustomer(document, user) {
   if (!document.targetType || document.targetType === "all") {
     return !document.targetCustomer
@@ -81,6 +89,10 @@ function documentTargetsCustomer(document, user) {
 
   return false;
 }
+
+/**
+ * Main customer shell that loads documents, requests, notifications, and route sections.
+ */
 function CustomerDashboard() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
@@ -104,6 +116,7 @@ function CustomerDashboard() {
   const approvedDocs = customerDocuments.filter((doc) => approvedDocIds.has(doc.id));
   const availableDocs = customerDocuments.filter((doc) => !activeRequestDocIds.has(doc.id));
   const unreadCount = notifications.filter((n) => !n.read).length;
+
   useEffect(() => {
     let active = true;
 
@@ -158,10 +171,18 @@ function CustomerDashboard() {
 
     return unsubscribe;
   }, [user?.id]);
+
+  /**
+   * Signs the customer out and returns to the login page.
+   */
   const handleLogout = () => {
     logout();
     navigate("/login");
   };
+
+  /**
+   * Creates a new access request for the selected document.
+   */
   const requestAccess = async (document) => {
     setRequestActionError("");
 
@@ -172,6 +193,10 @@ function CustomerDashboard() {
       setRequestActionError(error.message || "Unable to request document access.");
     }
   };
+
+  /**
+   * Marks every notification as read through Express.
+   */
   const markAllRead = async () => {
     try {
       await markNotificationsRead(notifications);
@@ -181,6 +206,10 @@ function CustomerDashboard() {
       setNotificationLoadError("Unable to mark notifications as read.");
     }
   };
+
+  /**
+   * Marks a single notification as read and updates local UI state.
+   */
   const markOneRead = async (notificationId) => {
     setUpdatingNotificationId(notificationId);
     setNotificationLoadError("");
@@ -201,6 +230,10 @@ function CustomerDashboard() {
       setUpdatingNotificationId("");
     }
   };
+
+  /**
+   * Deletes one notification from the customer's list.
+   */
   const dismissOneNotification = async (notificationId) => {
     setUpdatingNotificationId(notificationId);
     setNotificationLoadError("");
@@ -217,6 +250,10 @@ function CustomerDashboard() {
       setUpdatingNotificationId("");
     }
   };
+
+  /**
+   * Downloads an approved document through the signed-url service.
+   */
   const handleDownloadDocument = async (document) => {
     setDocumentLoadError("");
 
@@ -414,6 +451,9 @@ function CustomerDashboard() {
       <DocumentPreviewModal document={previewDocument} onClose={() => setPreviewDocument(null)} />
     </div>;
 }
+/**
+ * Sidebar navigation item for switching customer sections.
+ */
 function CustNavButton({
   label,
   Icon,
@@ -450,6 +490,9 @@ function CustNavButton({
         </span>}
     </button>;
 }
+/**
+ * Customer overview showing counts, recent requests, and latest notifications.
+ */
 function DashboardHome({
   user,
   approvedDocs,
@@ -590,6 +633,9 @@ function DashboardHome({
         </div>}
     </div>;
 }
+/**
+ * Customer document page for requesting access or opening approved files.
+ */
 function DocumentsSection({
   approvedDocs,
   documentLoadError,
@@ -664,6 +710,9 @@ function DocumentsSection({
         </div>}
     </div>;
 }
+/**
+ * Customer request-history table.
+ */
 function RequestsSection({
   myRequests,
   availableDocs,
@@ -765,6 +814,9 @@ function RequestsSection({
       </div>
     </div>;
 }
+/**
+ * Customer notifications screen with read and dismiss actions.
+ */
 function NotificationsSection({
   notifications,
   error,
@@ -850,9 +902,16 @@ function NotificationsSection({
       </div>
     </div>;
 }
+/**
+ * Customer profile screen with read-only account/company information.
+ */
 function ProfileSection({ user }) {
   const picRef = useRef(null);
   const [profilePic, setProfilePic] = useState(null);
+
+  /**
+   * Reads the selected profile image locally for an immediate avatar preview.
+   */
   const handlePicChange = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -946,6 +1005,9 @@ function ProfileSection({ user }) {
       </div>
     </div>;
 }
+/**
+ * Customer settings page for security preferences and contact notes.
+ */
 function CustomerSettingsContent({ user }) {
   const [pwSaved, setPwSaved] = useState(false);
   const [prefSaved, setPrefSaved] = useState(false);

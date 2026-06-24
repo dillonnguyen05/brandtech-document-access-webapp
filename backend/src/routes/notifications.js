@@ -5,12 +5,18 @@ import { adminDb } from "../firebaseAdmin.js";
 
 const router = express.Router();
 
+/**
+ * Creates an HTTP-style error object that the shared Express error handler can return.
+ */
 function createRouteError(status, message) {
   const error = new Error(message);
   error.status = status;
   return error;
 }
 
+/**
+ * Loads a notification and confirms the signed-in user owns it before mutation.
+ */
 async function getOwnedNotification(req) {
   const notificationRef = adminDb
     .collection("notifications")
@@ -31,6 +37,9 @@ async function getOwnedNotification(req) {
   return notificationSnapshot;
 }
 
+/**
+ * Marks up to 100 of the current user's unread notifications as read in one batch.
+ */
 router.patch("/read", async (req, res) => {
   const notificationIds = Array.isArray(req.body.notificationIds)
     ? [...new Set(req.body.notificationIds)]
@@ -86,6 +95,9 @@ router.patch("/read", async (req, res) => {
   });
 });
 
+/**
+ * Marks one owned notification as read.
+ */
 router.patch("/:notificationId/read", async (req, res) => {
   const notificationSnapshot = await getOwnedNotification(req);
 
@@ -102,6 +114,9 @@ router.patch("/:notificationId/read", async (req, res) => {
   });
 });
 
+/**
+ * Deletes one owned notification so it disappears from the customer's notification list.
+ */
 router.delete("/:notificationId", async (req, res) => {
   const notificationSnapshot = await getOwnedNotification(req);
 

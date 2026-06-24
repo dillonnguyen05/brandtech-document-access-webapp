@@ -1,5 +1,8 @@
 import { apiRequest } from "./apiClient.js";
 
+/**
+ * Formats audit timestamps into a readable date/time for the admin table.
+ */
 function formatAuditDate(value) {
   if (!value) return "—";
 
@@ -18,6 +21,9 @@ function formatAuditDate(value) {
   });
 }
 
+/**
+ * Loads the latest audit log entries from the Express admin API.
+ */
 export async function loadAuditLog() {
   const result = await apiRequest("/api/admin/audit-log");
 
