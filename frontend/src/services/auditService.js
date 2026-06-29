@@ -1,3 +1,4 @@
+// Function from apiClient.js; checks Firebase sign-in and sends bearer-token requests to Express.
 import { apiRequest } from "./apiClient.js";
 
 /**
@@ -25,6 +26,7 @@ function formatAuditDate(value) {
  * Loads the latest audit log entries from the Express admin API.
  */
 export async function loadAuditLog() {
+  // Function from apiClient.js: checks Firebase sign-in and requests admin audit rows from Express.
   const result = await apiRequest("/api/admin/audit-log");
 
   return result.auditLog.map((entry) => ({

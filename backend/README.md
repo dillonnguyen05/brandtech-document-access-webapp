@@ -188,3 +188,11 @@ Expected response:
 ```json
 {"status":"ok","service":"brandtech-api"}
 ```
+
+## Full Handoff Guide
+
+For the complete architecture, Firebase transfer checklist, collection schemas, route map, and troubleshooting notes, read:
+
+```text
+../TECHNICAL_DOCUMENTATION.md
+```

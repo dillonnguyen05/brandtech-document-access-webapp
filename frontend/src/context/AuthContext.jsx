@@ -11,7 +11,9 @@ import {
   doc,
   getDoc
 } from "firebase/firestore";
+// Firebase clients from firebaseConfig.js; AuthContext checks login state and reads user profiles.
 import { auth, db } from "../firebase/firebaseConfig";
+// Function from registrationService.js; checks profile data with Express before creating a customer profile.
 import { createCustomerProfile } from "../services/registrationService.js";
 
 const AuthContext = createContext(null);
@@ -190,6 +192,7 @@ function AuthProvider({ children }) {
         data.password
       );
       await sendEmailVerification(credential.user);
+      // Function from registrationService.js: asks Express to create the pending customer profile.
       await createCustomerProfile({
         fullName: data.fullName,
         email: data.email,

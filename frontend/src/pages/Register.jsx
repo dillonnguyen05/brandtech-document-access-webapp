@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { Eye, EyeOff, Mail, Lock, User, Building2, Phone, ChevronRight, MapPin } from "lucide-react";
+// Function from AuthContext.jsx; checks registration data and starts the customer account flow.
 import { useAuth } from "../context/AuthContext";
 import logo from "../imports/brandtech.jpg";
 const BS_BLACK = "#101820";
@@ -159,6 +160,7 @@ function Register() {
     }
 
     setLocationStatus("Creating account...");
+    // Function from AuthContext.jsx: checks registration data and starts Firebase/Express account creation.
     const result = await register({
       ...form,
       phone: `${selectedCountry.dialCode}${form.phone}`,

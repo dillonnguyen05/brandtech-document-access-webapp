@@ -5,7 +5,9 @@ import {
   query,
   where
 } from "firebase/firestore";
+// Firestore client from firebaseConfig.js; realtime listeners check request records in Firestore.
 import { db } from "../firebase/firebaseConfig";
+// Function from apiClient.js; checks Firebase sign-in and sends access-request decisions to Express.
 import { apiRequest } from "./apiClient.js";
 
 /**
@@ -16,6 +18,7 @@ export async function createAccessRequest(document) {
     throw new Error("Select a document before requesting access.");
   }
 
+  // Function from apiClient.js: checks Firebase sign-in and sends the customer access request to Express.
   return apiRequest("/api/access-requests", {
     method: "POST",
     body: JSON.stringify({
@@ -103,6 +106,7 @@ export function listenToCustomerRequests(userId, onRequests, onError) {
  * Sends a shared admin decision request for approve, deny, grant, or revoke.
  */
 function updateAccessRequest(requestId, action, message = "") {
+  // Function from apiClient.js: checks Firebase sign-in and sends the admin request decision to Express.
   return apiRequest(
     `/api/admin/access-requests/${encodeURIComponent(requestId)}/${action}`,
     {

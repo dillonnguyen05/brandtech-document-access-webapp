@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Download, FileText, X } from "lucide-react";
+// Functions from documentService.js; check document access and request signed preview/download URLs.
 import {
   downloadDocument,
   getDocumentUrl
@@ -53,6 +54,7 @@ function DocumentPreviewContent({ document, onClose }) {
       };
     }
 
+    // Function from documentService.js: asks Express for a signed inline preview URL.
     getDocumentUrl(document.id, "inline")
       .then((url) => {
         if (active) setPreviewUrl(url);
@@ -80,6 +82,7 @@ function DocumentPreviewContent({ document, onClose }) {
     setPreviewError("");
 
     try {
+      // Function from documentService.js: asks Express for a signed document download URL.
       await downloadDocument(document);
     } catch (error) {
       console.error(error);

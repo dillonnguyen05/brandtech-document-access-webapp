@@ -18,16 +18,21 @@ import {
   Settings,
   Trash2
 } from "lucide-react";
+// Function from AuthContext.jsx; checks the current logged-in customer and exposes logout.
 import { useAuth } from "../context/AuthContext";
+// Component from DocumentPreviewModal.jsx; checks file type and shows preview/download UI.
 import DocumentPreviewModal from "../components/DocumentPreviewModal";
+// Functions from documentService.js; check visible customer documents and approved downloads through Express.
 import {
   downloadDocument,
   loadCustomerDocuments
 } from "../services/documentService.js";
+// Functions from requestService.js; check customer access request creation and request listener data.
 import {
   createAccessRequest,
   listenToCustomerRequests
 } from "../services/requestService.js";
+// Functions from notificationService.js; check notification listener, read, and dismiss actions.
 import {
   dismissNotification,
   listenToUserNotifications,
@@ -120,6 +125,7 @@ function CustomerDashboard() {
   useEffect(() => {
     let active = true;
 
+    // Function from documentService.js: loads documents visible to this customer from Express.
     loadCustomerDocuments()
       .then((apiDocuments) => {
         if (!active) return;
@@ -140,6 +146,7 @@ function CustomerDashboard() {
   useEffect(() => {
     if (!user?.id) return undefined;
 
+    // Function from requestService.js: listens to this customer's Firestore access requests.
     const unsubscribe = listenToCustomerRequests(
       user.id,
       (firestoreRequests) => {
@@ -157,6 +164,7 @@ function CustomerDashboard() {
   useEffect(() => {
     if (!user?.id) return undefined;
 
+    // Function from notificationService.js: listens to this customer's Firestore notifications.
     const unsubscribe = listenToUserNotifications(
       user.id,
       (firestoreNotifications) => {
@@ -187,6 +195,7 @@ function CustomerDashboard() {
     setRequestActionError("");
 
     try {
+      // Function from requestService.js: asks Express to create a document access request.
       await createAccessRequest(document);
     } catch (error) {
       console.error(error);
@@ -199,6 +208,7 @@ function CustomerDashboard() {
    */
   const markAllRead = async () => {
     try {
+      // Function from notificationService.js: asks Express to mark all notifications as read.
       await markNotificationsRead(notifications);
       setNotificationLoadError("");
     } catch (error) {
@@ -215,6 +225,7 @@ function CustomerDashboard() {
     setNotificationLoadError("");
 
     try {
+      // Function from notificationService.js: asks Express to mark one notification as read.
       await markNotificationRead(notificationId);
       setNotifications((currentNotifications) => (
         currentNotifications.map((notification) => (
@@ -239,6 +250,7 @@ function CustomerDashboard() {
     setNotificationLoadError("");
 
     try {
+      // Function from notificationService.js: asks Express to delete one notification.
       await dismissNotification(notificationId);
       setNotifications((currentNotifications) => (
         currentNotifications.filter((notification) => notification.id !== notificationId)
@@ -258,6 +270,7 @@ function CustomerDashboard() {
     setDocumentLoadError("");
 
     try {
+      // Function from documentService.js: asks Express for a signed document download URL.
       await downloadDocument(document);
     } catch (error) {
       console.error(error);

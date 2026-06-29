@@ -1,10 +1,16 @@
 import { useEffect } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router";
+// Functions from AuthContext.jsx; check Firebase login state and expose the current app user.
 import { AuthProvider, useAuth } from "./context/AuthContext";
+// Function from apiClient.js; checks that the Express backend is reachable.
 import { checkApiConnection } from "./services/apiClient.js";
+// Page component from Login.jsx; handles sign-in UI.
 import Login from "./pages/Login";
+// Page component from Register.jsx; handles customer account registration UI.
 import Register from "./pages/Register";
+// Page component from AdminDashboard.jsx; handles admin-only portal screens.
 import AdminDashboard from "./pages/AdminDashboard";
+// Page component from CustomerDashboard.jsx; handles customer-only portal screens.
 import CustomerDashboard from "./pages/CustomerDashboard";
 
 /**
@@ -67,6 +73,7 @@ function LoadingScreen() {
  */
 function App() {
   useEffect(() => {
+    // Function from apiClient.js: checks that the Express API is reachable.
     checkApiConnection()
       .then((result) => {
         console.info(

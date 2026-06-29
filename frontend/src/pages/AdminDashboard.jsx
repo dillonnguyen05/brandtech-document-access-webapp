@@ -26,9 +26,12 @@ import {
   Trash2,
   MapPin
 } from "lucide-react";
+// Function from AuthContext.jsx; checks the current logged-in admin and exposes logout.
 import { useAuth } from "../context/AuthContext";
+// Component from DocumentPreviewModal.jsx; checks file type and shows preview/download UI.
 import DocumentPreviewModal from "../components/DocumentPreviewModal";
 import logo from "../imports/brandtech.jpg";
+// Functions from documentService.js; check document uploads, metadata edits, deletes, and downloads through Express.
 import {
   deleteDocument,
   downloadDocument,
@@ -36,7 +39,9 @@ import {
   updateDocument,
   uploadDocument
 } from "../services/documentService.js";
+// Function from auditService.js; checks the Express audit-log route and returns formatted audit rows.
 import { loadAuditLog } from "../services/auditService.js";
+// Functions from requestService.js; check document access request actions through Express and Firestore listeners.
 import {
   approveAccessRequest,
   denyAccessRequest,
@@ -44,6 +49,7 @@ import {
   listenToAccessRequests,
   revokeAccessRequest
 } from "../services/requestService.js";
+// Functions from userService.js; check customer approval/revocation actions and active customer listeners.
 import {
   approveCustomer,
   denyCustomer,
@@ -222,6 +228,7 @@ function AdminDashboard() {
    */
   const refreshDocuments = useCallback(async () => {
     try {
+      // Function from documentService.js: loads admin document metadata from Express.
       const apiDocuments = await loadAdminDocuments();
       setDocuments(apiDocuments);
       setDocumentLoadError("");
@@ -236,6 +243,7 @@ function AdminDashboard() {
    */
   const refreshAuditLog = useCallback(async () => {
     try {
+      // Function from auditService.js: loads audit log rows from Express.
       const apiAuditLog = await loadAuditLog();
       setAuditLog(apiAuditLog);
       setAuditLoadError("");
@@ -250,6 +258,7 @@ function AdminDashboard() {
    */
   const refreshPendingUsers = useCallback(async () => {
     try {
+      // Function from userService.js: loads pending customer accounts from Express.
       const customers = await loadPendingCustomers();
       setPendingUsers(customers);
       setUserApprovalError("");
@@ -276,6 +285,7 @@ function AdminDashboard() {
      * Polls pending users so email verification changes show without a page reload.
      */
     const loadPendingUsers = () => {
+      // Function from userService.js: loads pending customer accounts from Express.
       loadPendingCustomers()
         .then((customers) => {
           if (!active) return;
@@ -300,6 +310,7 @@ function AdminDashboard() {
   useEffect(() => {
     let active = true;
 
+    // Function from documentService.js: loads admin document metadata from Express.
     loadAdminDocuments()
       .then((apiDocuments) => {
         if (!active) return;
@@ -324,6 +335,7 @@ function AdminDashboard() {
      * Polls audit log updates so completed approvals and downloads appear without a full refresh.
      */
     const loadLatestAuditLog = () => {
+      // Function from auditService.js: loads audit log rows from Express.
       loadAuditLog()
         .then((apiAuditLog) => {
           if (!active) return;
@@ -347,6 +359,7 @@ function AdminDashboard() {
     };
   }, []);
   useEffect(() => {
+    // Function from requestService.js: listens to Firestore access request updates.
     const unsubscribe = listenToAccessRequests(
       (firestoreRequests) => {
         setRequests(firestoreRequests);
@@ -361,6 +374,7 @@ function AdminDashboard() {
     return unsubscribe;
   }, []);
   useEffect(() => {
+    // Function from userService.js: listens to active customer profiles for document targeting.
     const unsubscribe = listenToActiveCustomers(
       (customers) => {
         setActiveCustomers(customers);
@@ -383,6 +397,7 @@ function AdminDashboard() {
     if (!req) return;
     try {
       setRequestLoadError("");
+      // Function from requestService.js: asks Express to approve a document access request.
       await approveAccessRequest(id);
       await refreshAuditLog();
     } catch (error) {
@@ -409,6 +424,7 @@ function AdminDashboard() {
     if (!auditEntry) return;
     try {
       setRequestLoadError("");
+      // Function from requestService.js: asks Express to grant document access again.
       await grantAccessRequest(requestId);
       await refreshAuditLog();
     } catch (error) {
@@ -441,8 +457,10 @@ function AdminDashboard() {
     try {
       setRequestLoadError("");
       if (type === "deny") {
+        // Function from requestService.js: asks Express to deny a document request with a message.
         await denyAccessRequest(request.id, message);
       } else {
+        // Function from requestService.js: asks Express to revoke document access with a message.
         await revokeAccessRequest(request.id, message);
       }
 
@@ -485,6 +503,7 @@ function AdminDashboard() {
     setUploadError("");
 
     try {
+      // Function from documentService.js: uploads the file and metadata through Express.
       await uploadDocument(
         uploadFile,
         {
@@ -529,6 +548,7 @@ function AdminDashboard() {
     setDocumentActionError("");
 
     try {
+      // Function from documentService.js: asks Express for a signed document download URL.
       await downloadDocument(document);
     } catch (error) {
       console.error(error);
@@ -543,6 +563,7 @@ function AdminDashboard() {
     setDocumentActionError("");
 
     try {
+      // Function from documentService.js: updates document metadata through Express.
       await updateDocument(documentId, documentData);
       setEditingDocument(null);
       await Promise.all([
@@ -569,6 +590,7 @@ function AdminDashboard() {
     setDocumentActionError("");
 
     try {
+      // Function from documentService.js: deletes the document through Express.
       await deleteDocument(document.id);
       if (previewDocument?.id === document.id) {
         setPreviewDocument(null);
@@ -591,6 +613,7 @@ function AdminDashboard() {
     setUpdatingUserAction("approve");
     setUserApprovalError("");
     try {
+      // Function from userService.js: asks Express to approve a pending customer.
       await approveCustomer(userId);
       setPendingUsers((currentUsers) => (
         currentUsers.filter((pendingUser) => pendingUser.id !== userId)
@@ -621,12 +644,14 @@ function AdminDashboard() {
 
     try {
       if (type === "deny") {
+        // Function from userService.js: asks Express to deny a customer account with a message.
         await denyCustomer(customer.id, message);
         setPendingUsers((currentUsers) => (
           currentUsers.filter((pendingUser) => pendingUser.id !== customer.id)
         ));
         await refreshPendingUsers();
       } else {
+        // Function from userService.js: asks Express to revoke an active customer with a message.
         await revokeCustomer(customer.id, message);
         setActiveCustomers((currentCustomers) => (
           currentCustomers.filter((activeCustomer) => activeCustomer.id !== customer.id)

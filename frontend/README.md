@@ -174,3 +174,11 @@ npm run dev
 ```
 
 Open `http://localhost:5173`. The browser console should show the API health-check message if Express is reachable.
+
+## Full Handoff Guide
+
+For the complete architecture, Firebase transfer checklist, collection schemas, route map, and troubleshooting notes, read:
+
+```text
+../TECHNICAL_DOCUMENTATION.md
+```

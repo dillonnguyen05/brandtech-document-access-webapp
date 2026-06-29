@@ -4,7 +4,9 @@ import {
   query,
   where
 } from "firebase/firestore";
+// Firestore client from firebaseConfig.js; realtime listeners check this user's notification records.
 import { db } from "../firebase/firebaseConfig";
+// Function from apiClient.js; checks Firebase sign-in and sends notification updates to Express.
 import { apiRequest } from "./apiClient.js";
 
 /**
@@ -75,6 +77,7 @@ export async function markNotificationsRead(notifications) {
   const unreadNotifications = notifications.filter((notification) => !notification.read);
   if (unreadNotifications.length === 0) return;
 
+  // Function from apiClient.js: checks Firebase sign-in and marks notifications read through Express.
   await apiRequest("/api/notifications/read", {
     method: "PATCH",
     body: JSON.stringify({
@@ -87,6 +90,7 @@ export async function markNotificationsRead(notifications) {
  * Marks one notification as read through Express.
  */
 export function markNotificationRead(notificationId) {
+  // Function from apiClient.js: checks Firebase sign-in and marks one notification read through Express.
   return apiRequest(
     `/api/notifications/${encodeURIComponent(notificationId)}/read`,
     {
@@ -99,6 +103,7 @@ export function markNotificationRead(notificationId) {
  * Deletes one notification through Express.
  */
 export function dismissNotification(notificationId) {
+  // Function from apiClient.js: checks Firebase sign-in and deletes one notification through Express.
   return apiRequest(
     `/api/notifications/${encodeURIComponent(notificationId)}`,
     {

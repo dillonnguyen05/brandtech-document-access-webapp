@@ -1,3 +1,4 @@
+// Firebase Auth instance from firebaseConfig.js; apiClient checks the current user before API calls.
 import { auth } from "../firebase/firebaseConfig";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";

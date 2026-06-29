@@ -98,5 +98,6 @@ Paste/publish those rules in the Firebase Console when they change. Local `.txt`
 
 ## More Documentation
 
+- Technical handoff and Firebase transfer guide: `TECHNICAL_DOCUMENTATION.md`
 - Frontend details: `frontend/README.md`
 - Backend details: `backend/README.md`

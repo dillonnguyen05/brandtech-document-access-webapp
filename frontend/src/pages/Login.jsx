@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { Eye, EyeOff, Mail, Lock, ChevronRight } from "lucide-react";
+// Function from AuthContext.jsx; checks login credentials and returns the user's role.
 import { useAuth } from "../context/AuthContext";
 import logo from "../imports/brandtech.jpg";
 const BS_BLACK = "#101820";
@@ -28,6 +29,7 @@ function Login() {
     setError("");
     setLoading(true);
     await new Promise((r) => setTimeout(r, 450));
+    // Function from AuthContext.jsx: checks Firebase login and returns the user's role.
     const result = await login(email, password);
     setLoading(false);
     if (result.success) {

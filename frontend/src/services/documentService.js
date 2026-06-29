@@ -1,3 +1,4 @@
+// Functions from apiClient.js; check Firebase sign-in, attach bearer tokens, and send document API calls.
 import { apiRequest, uploadApiFile } from "./apiClient.js";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
@@ -82,6 +83,7 @@ export async function uploadDocument(file, documentData, onProgress) {
   formData.append("targetCompany", documentData.targetCompany || "");
   formData.append("targetCustomerId", documentData.targetCustomerId || "");
 
+  // Function from apiClient.js: uploads FormData to Express while reporting progress.
   const result = await uploadApiFile(
     "/api/admin/documents",
     formData,
@@ -95,6 +97,7 @@ export async function uploadDocument(file, documentData, onProgress) {
  * Loads all documents for admin management.
  */
 export async function loadAdminDocuments() {
+  // Function from apiClient.js: checks Firebase sign-in and loads admin documents from Express.
   const result = await apiRequest("/api/admin/documents");
   return result.documents.map(formatDocument);
 }
@@ -103,6 +106,7 @@ export async function loadAdminDocuments() {
  * Loads documents visible to the signed-in customer.
  */
 export async function loadCustomerDocuments() {
+  // Function from apiClient.js: checks Firebase sign-in and loads visible customer documents from Express.
   const result = await apiRequest("/api/documents");
   return result.documents.map(formatDocument);
 }
@@ -111,6 +115,7 @@ export async function loadCustomerDocuments() {
  * Updates document metadata and targeting rules.
  */
 export async function updateDocument(documentId, documentData) {
+  // Function from apiClient.js: checks Firebase sign-in and updates document metadata through Express.
   const result = await apiRequest(
     `/api/admin/documents/${encodeURIComponent(documentId)}`,
     {
@@ -126,6 +131,7 @@ export async function updateDocument(documentId, documentData) {
  * Deletes a document, its Storage file, related requests, and related notifications through Express.
  */
 export function deleteDocument(documentId) {
+  // Function from apiClient.js: checks Firebase sign-in and deletes a document through Express.
   return apiRequest(
     `/api/admin/documents/${encodeURIComponent(documentId)}`,
     {
@@ -139,6 +145,7 @@ export function deleteDocument(documentId) {
  */
 export async function getDocumentUrl(documentId, disposition = "attachment") {
   const query = new URLSearchParams({ disposition });
+  // Function from apiClient.js: checks Firebase sign-in and requests a signed file URL from Express.
   const result = await apiRequest(
     `/api/documents/${encodeURIComponent(documentId)}/download?${query}`
   );
@@ -150,6 +157,7 @@ export async function getDocumentUrl(documentId, disposition = "attachment") {
  * Creates a temporary anchor element to start the browser download.
  */
 export async function downloadDocument(document) {
+  // Function from this file: gets a signed download URL before opening it in the browser.
   const url = await getDocumentUrl(document.id, "attachment");
   const link = window.document.createElement("a");
 

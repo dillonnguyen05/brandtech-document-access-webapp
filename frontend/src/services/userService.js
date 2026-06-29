@@ -4,7 +4,9 @@ import {
   query,
   where
 } from "firebase/firestore";
+// Firestore client from firebaseConfig.js; realtime listeners check active customer profiles.
 import { db } from "../firebase/firebaseConfig";
+// Function from apiClient.js; checks Firebase sign-in and sends admin user decisions to Express.
 import { apiRequest } from "./apiClient.js";
 
 /**
@@ -37,6 +39,7 @@ export function listenToActiveCustomers(onCustomers, onError) {
  * Loads pending customer registration requests for admin approval.
  */
 export async function loadPendingCustomers() {
+  // Function from apiClient.js: checks Firebase sign-in and loads pending users from Express.
   const result = await apiRequest("/api/admin/users/pending");
   return result.users;
 }
@@ -45,6 +48,7 @@ export async function loadPendingCustomers() {
  * Sends a shared admin account decision request.
  */
 function reviewCustomer(userId, action, message = "") {
+  // Function from apiClient.js: checks Firebase sign-in and sends the account decision to Express.
   return apiRequest(
     `/api/admin/users/${encodeURIComponent(userId)}/${action}`,
     {
