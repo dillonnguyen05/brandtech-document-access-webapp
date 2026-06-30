@@ -17,7 +17,7 @@ The frontend is responsible for the visual experience: login/register screens, a
 
 ## Current Architecture
 
-```text
+```
 React frontend
   -> Firebase Auth client session
   -> Express API with bearer token
@@ -46,15 +46,15 @@ VITE_FIREBASE_APP_ID=your_app_id
 
 ```bash
 npm install
-npm run dev
-npm run build
-npm run lint
-npm run preview
+npm run dev - for debugging / development
+npm run build - for aws, generates production file
+npm run lint - syntax
+npm run preview - preview of production
 ```
 
 ## Important Files
 
-```text
+```
 src/App.jsx
 ```
 
@@ -65,25 +65,25 @@ Defines routes and route protection:
 - `/admin`
 - `/dashboard`
 
-```text
+```
 src/context/AuthContext.jsx
 ```
 
 Keeps track of the signed-in Firebase user, loads the Firestore profile, blocks pending/denied/revoked/unverified customers, and exposes `login`, `register`, and `logout`.
 
-```text
+```
 src/services/apiClient.js
 ```
 
 The bridge from React to Express. It reads the Firebase ID token from the current user and sends it as:
 
-```text
+```
 Authorization: Bearer <firebase-id-token>
 ```
 
 Every backend service function builds on this file.
 
-```text
+```
 src/services/
 ```
 
@@ -100,19 +100,19 @@ They are `.js` files because they are plain JavaScript helper modules, not React
 
 ## Pages
 
-```text
+```
 src/pages/Login.jsx
 ```
 
 Signs users in and redirects by role.
 
-```text
+```
 src/pages/Register.jsx
 ```
 
 Creates customer accounts. It validates phone number length by country, requires browser location, creates the Firebase Auth user, sends email verification, and asks Express to create the pending customer profile.
 
-```text
+```
 src/pages/AdminDashboard.jsx
 ```
 
@@ -127,7 +127,7 @@ Admin portal:
 - Audit log including customer downloads
 - Settings/profile UI
 
-```text
+```
 src/pages/CustomerDashboard.jsx
 ```
 
@@ -142,7 +142,7 @@ Customer portal:
 
 ## Components
 
-```text
+```
 src/components/DocumentPreviewModal.jsx
 ```
 
@@ -150,7 +150,7 @@ Shows in-app previews for images and PDFs. Office documents are downloaded becau
 
 ## Firebase Reference Files
 
-```text
+```
 src/firebase/securityRules.txt
 src/firebase/storageRules.txt
 ```
@@ -179,6 +179,6 @@ Open `http://localhost:5173`. The browser console should show the API health-che
 
 For the complete architecture, Firebase transfer checklist, collection schemas, route map, and troubleshooting notes, read:
 
-```text
+```
 ../TECHNICAL_DOCUMENTATION.md
 ```

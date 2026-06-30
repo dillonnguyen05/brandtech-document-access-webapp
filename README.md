@@ -97,7 +97,5 @@ Reference copies live in:
 Paste/publish those rules in the Firebase Console when they change. Local `.txt` files are documentation only until published.
 
 ## More Documentation
-
-- Technical handoff and Firebase transfer guide: `TECHNICAL_DOCUMENTATION.md`
 - Frontend details: `frontend/README.md`
 - Backend details: `backend/README.md`

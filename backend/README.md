@@ -18,7 +18,7 @@ The backend is the trusted middleware layer between React and Firebase. React ca
 
 ## Request Lifecycle
 
-```text
+```
 React service function
   -> apiClient fetch/upload
   -> Authorization: Bearer <Firebase ID token>
@@ -61,13 +61,13 @@ npm start
 
 ## Important Files
 
-```text
+```
 src/server.js
 ```
 
 Configures Express, CORS, JSON parsing, request logging, health check, route mounting, 404 responses, error handling, and server startup.
 
-```text
+```
 src/firebaseAdmin.js
 ```
 
@@ -75,25 +75,25 @@ Initializes the Firebase Admin SDK using local environment credentials. Exports 
 
 ## Middleware
 
-```text
+```
 src/middleware/verifyFirebaseToken.js
 ```
 
 Reads the bearer token from the request, verifies it with Firebase Admin Auth, and attaches decoded auth data to `req.auth`.
 
-```text
+```
 src/middleware/requireAdmin.js
 ```
 
 Loads the current Firestore user profile and only allows users with `role: "admin"` and `status: "active"`.
 
-```text
+```
 src/middleware/requireActiveUser.js
 ```
 
 Loads the current profile and blocks inactive, pending, denied, revoked, or missing users.
 
-```text
+```
 src/middleware/requireCustomer.js
 ```
 
@@ -101,13 +101,13 @@ Allows only active customer profiles through customer-only routes.
 
 ## Routes
 
-```text
+```
 src/routes/registration.js
 ```
 
 Creates pending customer profiles after Firebase Auth registration. Requires full name, company, phone, and browser geolocation.
 
-```text
+```
 src/routes/adminUsers.js
 ```
 
@@ -120,7 +120,7 @@ Admin user management:
 - Revoke active customers with a message
 - Write notifications and audit-log entries
 
-```text
+```
 src/routes/documents.js
 ```
 
@@ -133,7 +133,7 @@ Document management and access:
 - Generate short-lived signed preview/download URLs
 - Log customer downloads in the audit log
 
-```text
+```
 src/routes/accessRequests.js
 ```
 
@@ -145,7 +145,7 @@ Document access workflow:
 - Admins revoke approved access with a message
 - Notifications and audit rows are created with each decision
 
-```text
+```
 src/routes/notifications.js
 ```
 
@@ -155,7 +155,7 @@ Notification actions:
 - Mark one notification as read
 - Dismiss one notification
 
-```text
+```
 src/routes/auditLog.js
 ```
 
@@ -189,10 +189,4 @@ Expected response:
 {"status":"ok","service":"brandtech-api"}
 ```
 
-## Full Handoff Guide
 
-For the complete architecture, Firebase transfer checklist, collection schemas, route map, and troubleshooting notes, read:
-
-```text
-../TECHNICAL_DOCUMENTATION.md
-```
