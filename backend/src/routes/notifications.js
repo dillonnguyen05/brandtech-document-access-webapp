@@ -15,6 +15,15 @@ function createRouteError(status, message) {
 }
 
 /**
+ * Converts Firestore Timestamp values into ISO strings for React.
+ */
+function timestampToIso(value) {
+  return typeof value?.toDate === "function"
+    ? value.toDate().toISOString()
+    : null;
+}
+
+/**
  * Loads a notification and confirms the signed-in user owns it before mutation.
  */
 async function getOwnedNotification(req) {
@@ -36,6 +45,31 @@ async function getOwnedNotification(req) {
 
   return notificationSnapshot;
 }
+
+/**
+ * Lists notifications owned by the current signed-in user.
+ */
+router.get("/", async (req, res) => {
+  const snapshot = await adminDb
+    .collection("notifications")
+    .where("recipientId", "==", req.auth.uid)
+    .get();
+
+  const notifications = snapshot.docs
+    .map((notificationSnapshot) => {
+      const data = notificationSnapshot.data();
+
+      return {
+        id: notificationSnapshot.id,
+        ...data,
+        createdAt: timestampToIso(data.createdAt),
+        readAt: timestampToIso(data.readAt)
+      };
+    })
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+
+  res.status(200).json({ notifications });
+});
 
 /**
  * Marks up to 100 of the current user's unread notifications as read in one batch.

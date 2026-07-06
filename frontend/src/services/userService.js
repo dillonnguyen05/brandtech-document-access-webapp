@@ -1,38 +1,13 @@
-import {
-  collection,
-  onSnapshot,
-  query,
-  where
-} from "firebase/firestore";
-// Firestore client from firebaseConfig.js; realtime listeners check active customer profiles.
-import { db } from "../firebase/firebaseConfig";
 // Function from apiClient.js; checks Firebase sign-in and sends admin user decisions to Express.
 import { apiRequest } from "./apiClient.js";
 
 /**
- * Opens a realtime listener for active customer profiles used by admin targeting controls.
+ * Loads active customer profiles used by admin document targeting controls.
  */
-export function listenToActiveCustomers(onCustomers, onError) {
-  const customersQuery = query(
-    collection(db, "users"),
-    where("status", "==", "active")
-  );
-
-  return onSnapshot(
-    customersQuery,
-    (snapshot) => {
-      const customers = snapshot.docs
-        .map((customerSnapshot) => ({
-          id: customerSnapshot.id,
-          ...customerSnapshot.data()
-        }))
-        .filter((customer) => customer.role === "customer")
-        .sort((a, b) => (a.company || "").localeCompare(b.company || "") || (a.name || "").localeCompare(b.name || ""));
-
-      onCustomers(customers);
-    },
-    onError
-  );
+export async function loadActiveCustomers() {
+  // Function from apiClient.js: checks Firebase sign-in and loads active customers from Express.
+  const result = await apiRequest("/api/admin/users/active-customers");
+  return result.users;
 }
 
 /**

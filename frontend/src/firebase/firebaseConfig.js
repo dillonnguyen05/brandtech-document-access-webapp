@@ -1,7 +1,5 @@
 import { initializeApp } from "firebase/app"
 import { getAuth } from "firebase/auth"
-import { getFirestore } from "firebase/firestore"
-import { getStorage } from "firebase/storage"
 
 // Loads the Firebase web app configuration from Vite environment variables.
 const firebaseConfig = {
@@ -18,7 +16,5 @@ const app = initializeApp(firebaseConfig)
 
 console.log("Firebase initialized:", app.name, firebaseConfig.projectId)
 
-// Shared Firebase client SDK handles for authentication, Firestore reads, and Storage references.
+// Shared Firebase client SDK handle for browser authentication.
 export const auth = getAuth(app)
-export const db = getFirestore(app)
-export const storage = getStorage(app)

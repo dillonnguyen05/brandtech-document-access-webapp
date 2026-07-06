@@ -1,16 +1,8 @@
-import {
-  collection,
-  onSnapshot,
-  query,
-  where
-} from "firebase/firestore";
-// Firestore client from firebaseConfig.js; realtime listeners check this user's notification records.
-import { db } from "../firebase/firebaseConfig";
 // Function from apiClient.js; checks Firebase sign-in and sends notification updates to Express.
 import { apiRequest } from "./apiClient.js";
 
 /**
- * Converts Firestore notification timestamps into user-friendly labels.
+ * Converts API notification timestamps into user-friendly labels.
  */
 function formatNotificationDate(value) {
   if (!value) return "Just now";
@@ -25,49 +17,53 @@ function formatNotificationDate(value) {
     });
   }
 
-  return String(value);
+  const date = value instanceof Date ? value : new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+
+  return date.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
 }
 
 /**
  * Sorts notifications so newest updates appear first.
  */
 function sortByCreatedAtDesc(a, b) {
-  const aMillis = typeof a.createdAt?.toMillis === "function" ? a.createdAt.toMillis() : 0;
-  const bMillis = typeof b.createdAt?.toMillis === "function" ? b.createdAt.toMillis() : 0;
+  const aMillis = typeof a.createdAt?.toMillis === "function"
+    ? a.createdAt.toMillis()
+    : new Date(a.createdAt || 0).getTime();
+  const bMillis = typeof b.createdAt?.toMillis === "function"
+    ? b.createdAt.toMillis()
+    : new Date(b.createdAt || 0).getTime();
   return bMillis - aMillis;
 }
 
 /**
- * Maps a Firestore snapshot into dashboard notification objects.
+ * Maps API notification rows into dashboard notification objects.
  */
-function mapNotificationSnapshot(snapshot) {
-  return snapshot.docs
-    .map((notificationSnapshot) => {
-      const data = notificationSnapshot.data();
-
-      return {
-        id: notificationSnapshot.id,
-        ...data,
-        timestamp: formatNotificationDate(data.createdAt)
-      };
-    })
+function mapApiNotifications(notifications = []) {
+  return notifications
+    .map((notification) => ({
+      ...notification,
+      timestamp: formatNotificationDate(notification.createdAt)
+    }))
     .sort(sortByCreatedAtDesc);
 }
 
 /**
- * Opens a realtime listener for notifications owned by one user.
+ * Loads notifications owned by the signed-in user through Express.
  */
-export function listenToUserNotifications(userId, onNotifications, onError) {
-  const notificationsQuery = query(
-    collection(db, "notifications"),
-    where("recipientId", "==", userId)
-  );
-
-  return onSnapshot(
-    notificationsQuery,
-    (snapshot) => onNotifications(mapNotificationSnapshot(snapshot)),
-    onError
-  );
+export async function loadUserNotifications() {
+  // Function from apiClient.js: checks Firebase sign-in and loads notifications from Express.
+  const result = await apiRequest("/api/notifications");
+  return mapApiNotifications(result.notifications);
 }
 
 /**

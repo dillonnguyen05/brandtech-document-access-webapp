@@ -32,10 +32,10 @@ import {
   createAccessRequest,
   loadCustomerRequests
 } from "../services/requestService.js";
-// Functions from notificationService.js; check notification listener, read, and dismiss actions.
+// Functions from notificationService.js; check notification reads, read status, and dismiss actions through Express.
 import {
   dismissNotification,
-  listenToUserNotifications,
+  loadUserNotifications,
   markNotificationRead,
   markNotificationsRead
 } from "../services/notificationService.js";
@@ -149,7 +149,7 @@ function CustomerDashboard() {
     let active = true;
 
     /**
-     * Polls customer request history through Express instead of browser Firestore listeners.
+     * Polls customer request history through Express so production does not rely on client Firestore reads.
      */
     const loadLatestCustomerRequests = () => {
       // Function from requestService.js: loads this customer's access requests from Express.
@@ -178,20 +178,34 @@ function CustomerDashboard() {
   useEffect(() => {
     if (!user?.id) return undefined;
 
-    // Function from notificationService.js: listens to this customer's Firestore notifications.
-    const unsubscribe = listenToUserNotifications(
-      user.id,
-      (firestoreNotifications) => {
-        setNotifications(firestoreNotifications);
-        setNotificationLoadError("");
-      },
-      (error) => {
-        console.error(error);
-        setNotificationLoadError("Unable to load your notifications.");
-      }
-    );
+    let active = true;
 
-    return unsubscribe;
+    /**
+     * Polls notifications through Express so production does not rely on client Firestore reads.
+     */
+    const loadLatestNotifications = () => {
+      // Function from notificationService.js: loads this customer's notifications from Express.
+      loadUserNotifications()
+        .then((apiNotifications) => {
+          if (!active) return;
+          setNotifications(apiNotifications);
+          setNotificationLoadError("");
+        })
+        .catch((error) => {
+          console.error(error);
+          if (active) {
+            setNotificationLoadError(error.message || "Unable to load your notifications.");
+          }
+        });
+    };
+
+    loadLatestNotifications();
+    const intervalId = window.setInterval(loadLatestNotifications, 15e3);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
   }, [user?.id]);
 
   /**
@@ -230,6 +244,12 @@ function CustomerDashboard() {
     try {
       // Function from notificationService.js: asks Express to mark all notifications as read.
       await markNotificationsRead(notifications);
+      setNotifications((currentNotifications) => (
+        currentNotifications.map((notification) => ({
+          ...notification,
+          read: true
+        }))
+      ));
       setNotificationLoadError("");
     } catch (error) {
       console.error(error);

@@ -372,6 +372,30 @@ router.get("/pending", async (req, res) => {
   res.status(200).json({ users });
 });
 
+// Lists active customers for admin document targeting controls.
+router.get("/active-customers", async (req, res) => {
+  const snapshot = await adminDb
+    .collection("users")
+    .where("status", "==", "active")
+    .get();
+
+  const customerSnapshots = snapshot.docs
+    .filter((customerSnapshot) => customerSnapshot.data().role === "customer");
+  const authUsers = await loadAuthUsers(
+    customerSnapshots.map((customerSnapshot) => customerSnapshot.id)
+  );
+  const users = customerSnapshots
+    .map((customerSnapshot) => (
+      formatCustomerSnapshot(customerSnapshot, authUsers.get(customerSnapshot.id))
+    ))
+    .sort((a, b) => (
+      (a.company || "").localeCompare(b.company || "")
+      || (a.name || "").localeCompare(b.name || "")
+    ));
+
+  res.status(200).json({ users });
+});
+
 // Marks a pending customer as active after email verification and location checks pass.
 router.post("/:userId/approve", async (req, res) => {
   await reviewPendingCustomer(req, "approved");

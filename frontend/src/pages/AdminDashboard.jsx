@@ -39,7 +39,7 @@ import {
 } from "../services/documentService.js";
 // Function from auditService.js; checks the Express audit-log route and returns formatted audit rows.
 import { loadAuditLog } from "../services/auditService.js";
-// Functions from requestService.js; check document access request actions through Express and Firestore listeners.
+// Functions from requestService.js; check document access request actions through Express.
 import {
   approveAccessRequest,
   denyAccessRequest,
@@ -47,12 +47,12 @@ import {
   loadAccessRequests,
   revokeAccessRequest
 } from "../services/requestService.js";
-// Functions from userService.js; check customer approval/revocation actions and active customer listeners.
+// Functions from userService.js; check customer approval/revocation actions and active customer reads through Express.
 import {
   approveCustomer,
   denyCustomer,
+  loadActiveCustomers,
   loadPendingCustomers,
-  listenToActiveCustomers,
   revokeCustomer
 } from "../services/userService.js";
 const BS_BLACK = "#101820";
@@ -265,6 +265,21 @@ function AdminDashboard() {
   }, []);
 
   /**
+   * Reloads active customers used by upload targeting and revocation controls.
+   */
+  const refreshActiveCustomers = useCallback(async () => {
+    try {
+      // Function from userService.js: loads active customers from Express.
+      const customers = await loadActiveCustomers();
+      setActiveCustomers(customers);
+      setActiveCustomerError("");
+    } catch (error) {
+      console.error(error);
+      setActiveCustomerError(error.message || "Unable to load active customers.");
+    }
+  }, []);
+
+  /**
    * Reloads document access requests from Express.
    */
   const refreshAccessRequests = useCallback(async () => {
@@ -373,7 +388,7 @@ function AdminDashboard() {
     let active = true;
 
     /**
-     * Polls access requests so the admin queue updates without browser Firestore listeners.
+     * Polls access requests through Express so the admin queue updates in production.
      */
     const loadLatestAccessRequests = () => {
       // Function from requestService.js: loads admin access requests from Express.
@@ -400,19 +415,34 @@ function AdminDashboard() {
     };
   }, []);
   useEffect(() => {
-    // Function from userService.js: listens to active customer profiles for document targeting.
-    const unsubscribe = listenToActiveCustomers(
-      (customers) => {
-        setActiveCustomers(customers);
-        setActiveCustomerError("");
-      },
-      (error) => {
-        console.error(error);
-        setActiveCustomerError("Unable to load active customers.");
-      }
-    );
+    let active = true;
 
-    return unsubscribe;
+    /**
+     * Polls active customers for document targeting through Express.
+     */
+    const loadLatestActiveCustomers = () => {
+      // Function from userService.js: loads active customers from Express.
+      loadActiveCustomers()
+        .then((customers) => {
+          if (!active) return;
+          setActiveCustomers(customers);
+          setActiveCustomerError("");
+        })
+        .catch((error) => {
+          console.error(error);
+          if (active) {
+            setActiveCustomerError(error.message || "Unable to load active customers.");
+          }
+        });
+    };
+
+    loadLatestActiveCustomers();
+    const intervalId = window.setInterval(loadLatestActiveCustomers, 15e3);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
   }, []);
 
   /**
@@ -655,6 +685,7 @@ function AdminDashboard() {
       ));
       await Promise.all([
         refreshPendingUsers(),
+        refreshActiveCustomers(),
         refreshAuditLog()
       ]);
     } catch (error) {
@@ -691,6 +722,7 @@ function AdminDashboard() {
         setActiveCustomers((currentCustomers) => (
           currentCustomers.filter((activeCustomer) => activeCustomer.id !== customer.id)
         ));
+        await refreshActiveCustomers();
       }
 
       setAccountDecision(null);
