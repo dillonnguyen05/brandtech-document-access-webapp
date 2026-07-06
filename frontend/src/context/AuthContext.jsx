@@ -130,7 +130,19 @@ function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let authResolved = false;
+    const authTimeout = window.setTimeout(() => {
+      if (!authResolved) {
+        console.warn("Firebase auth state took too long to resolve. Showing the login route.");
+        setUser(null);
+        setLoading(false);
+      }
+    }, 5000);
+
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      authResolved = true;
+      window.clearTimeout(authTimeout);
+
       try {
         if (!firebaseUser) {
           setUser(null);
@@ -147,7 +159,10 @@ function AuthProvider({ children }) {
       }
     });
 
-    return unsubscribe;
+    return () => {
+      window.clearTimeout(authTimeout);
+      unsubscribe();
+    };
   }, []);
 
   /**
