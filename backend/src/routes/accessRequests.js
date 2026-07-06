@@ -260,6 +260,20 @@ router.post("/:requestId/revoke", async (req, res) => {
   });
 });
 
+// Lists the current customer's request history through Express.
+customerAccessRequestsRouter.get("/", async (req, res) => {
+  const snapshot = await adminDb
+    .collection("accessRequests")
+    .where("customerId", "==", req.auth.uid)
+    .get();
+
+  const requests = snapshot.docs
+    .map(formatRequestSnapshot)
+    .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
+
+  res.status(200).json({ requests });
+});
+
 // Lets active customers request access to documents assigned to them or their company.
 customerAccessRequestsRouter.post("/", async (req, res) => {
   const documentId = typeof req.body.documentId === "string"

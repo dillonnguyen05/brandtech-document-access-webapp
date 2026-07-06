@@ -1,12 +1,3 @@
-import {
-  collection,
-  onSnapshot,
-  orderBy,
-  query,
-  where
-} from "firebase/firestore";
-// Firestore client from firebaseConfig.js; realtime listeners check request records in Firestore.
-import { db } from "../firebase/firebaseConfig";
 // Function from apiClient.js; checks Firebase sign-in and sends access-request decisions to Express.
 import { apiRequest } from "./apiClient.js";
 
@@ -41,65 +32,60 @@ function formatRequestDate(value) {
     });
   }
 
-  return String(value);
+  const date = value instanceof Date ? value : new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric"
+  });
 }
 
 /**
  * Sorts access requests oldest first so admins handle the queue fairly.
  */
 function sortByCreatedAtAsc(a, b) {
-  const aMillis = typeof a.createdAt?.toMillis === "function" ? a.createdAt.toMillis() : 0;
-  const bMillis = typeof b.createdAt?.toMillis === "function" ? b.createdAt.toMillis() : 0;
+  const aMillis = typeof a.createdAt?.toMillis === "function"
+    ? a.createdAt.toMillis()
+    : new Date(a.createdAt || 0).getTime();
+  const bMillis = typeof b.createdAt?.toMillis === "function"
+    ? b.createdAt.toMillis()
+    : new Date(b.createdAt || 0).getTime();
   return aMillis - bMillis;
 }
 
 /**
- * Converts Firestore access request snapshots into UI-ready request objects.
+ * Converts access request API rows into UI-ready request objects.
  */
-function mapRequestSnapshot(snapshot) {
-  return snapshot.docs
-    .map((requestSnapshot) => {
-      const data = requestSnapshot.data();
-
-      return {
-        id: requestSnapshot.id,
-        ...data,
-        dateRequested: formatRequestDate(data.createdAt)
-      };
-    })
+function mapApiRequests(requests = []) {
+  return requests
+    .map((request) => ({
+      ...request,
+      dateRequested: formatRequestDate(request.createdAt)
+    }))
     .sort(sortByCreatedAtAsc);
 }
 
 /**
- * Opens a realtime listener for all access requests in admin view.
+ * Loads all access requests for the admin queue through Express.
  */
-export function listenToAccessRequests(onRequests, onError) {
-  const requestsQuery = query(
-    collection(db, "accessRequests"),
-    orderBy("createdAt", "asc")
-  );
-
-  return onSnapshot(
-    requestsQuery,
-    (snapshot) => onRequests(mapRequestSnapshot(snapshot)),
-    onError
-  );
+export async function loadAccessRequests() {
+  // Function from apiClient.js: checks Firebase sign-in and loads admin access requests from Express.
+  const result = await apiRequest("/api/admin/access-requests");
+  return mapApiRequests(result.requests);
 }
 
 /**
- * Opens a realtime listener for one customer's access request history.
+ * Loads one customer's access request history through Express.
  */
-export function listenToCustomerRequests(userId, onRequests, onError) {
-  const requestsQuery = query(
-    collection(db, "accessRequests"),
-    where("customerId", "==", userId)
-  );
-
-  return onSnapshot(
-    requestsQuery,
-    (snapshot) => onRequests(mapRequestSnapshot(snapshot)),
-    onError
-  );
+export async function loadCustomerRequests() {
+  // Function from apiClient.js: checks Firebase sign-in and loads this customer's requests from Express.
+  const result = await apiRequest("/api/access-requests");
+  return mapApiRequests(result.requests);
 }
 
 /**

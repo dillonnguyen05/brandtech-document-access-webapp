@@ -27,10 +27,10 @@ import {
   downloadDocument,
   loadCustomerDocuments
 } from "../services/documentService.js";
-// Functions from requestService.js; check customer access request creation and request listener data.
+// Functions from requestService.js; check customer access request creation and request history through Express.
 import {
   createAccessRequest,
-  listenToCustomerRequests
+  loadCustomerRequests
 } from "../services/requestService.js";
 // Functions from notificationService.js; check notification listener, read, and dismiss actions.
 import {
@@ -146,20 +146,34 @@ function CustomerDashboard() {
   useEffect(() => {
     if (!user?.id) return undefined;
 
-    // Function from requestService.js: listens to this customer's Firestore access requests.
-    const unsubscribe = listenToCustomerRequests(
-      user.id,
-      (firestoreRequests) => {
-        setMyRequests(firestoreRequests);
-        setRequestLoadError("");
-      },
-      (error) => {
-        console.error(error);
-        setRequestLoadError("Unable to load your access requests.");
-      }
-    );
+    let active = true;
 
-    return unsubscribe;
+    /**
+     * Polls customer request history through Express instead of browser Firestore listeners.
+     */
+    const loadLatestCustomerRequests = () => {
+      // Function from requestService.js: loads this customer's access requests from Express.
+      loadCustomerRequests()
+        .then((apiRequests) => {
+          if (!active) return;
+          setMyRequests(apiRequests);
+          setRequestLoadError("");
+        })
+        .catch((error) => {
+          console.error(error);
+          if (active) {
+            setRequestLoadError(error.message || "Unable to load your access requests.");
+          }
+        });
+    };
+
+    loadLatestCustomerRequests();
+    const intervalId = window.setInterval(loadLatestCustomerRequests, 15e3);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
   }, [user?.id]);
   useEffect(() => {
     if (!user?.id) return undefined;
@@ -197,9 +211,15 @@ function CustomerDashboard() {
     try {
       // Function from requestService.js: asks Express to create a document access request.
       await createAccessRequest(document);
+      // Function from requestService.js: reloads request history so My Requests updates immediately.
+      const apiRequests = await loadCustomerRequests();
+      setMyRequests(apiRequests);
+      setSection("requests");
+      setRequestLoadError("");
     } catch (error) {
       console.error(error);
       setRequestActionError(error.message || "Unable to request document access.");
+      setSection("requests");
     }
   };
 

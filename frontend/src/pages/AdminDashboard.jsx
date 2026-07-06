@@ -44,7 +44,7 @@ import {
   approveAccessRequest,
   denyAccessRequest,
   grantAccessRequest,
-  listenToAccessRequests,
+  loadAccessRequests,
   revokeAccessRequest
 } from "../services/requestService.js";
 // Functions from userService.js; check customer approval/revocation actions and active customer listeners.
@@ -265,6 +265,21 @@ function AdminDashboard() {
   }, []);
 
   /**
+   * Reloads document access requests from Express.
+   */
+  const refreshAccessRequests = useCallback(async () => {
+    try {
+      // Function from requestService.js: loads admin access requests from Express.
+      const apiRequests = await loadAccessRequests();
+      setRequests(apiRequests);
+      setRequestLoadError("");
+    } catch (error) {
+      console.error(error);
+      setRequestLoadError(error.message || "Unable to load access requests.");
+    }
+  }, []);
+
+  /**
    * Signs the admin out and returns to the login page.
    */
   const handleLogout = () => {
@@ -355,19 +370,34 @@ function AdminDashboard() {
     };
   }, []);
   useEffect(() => {
-    // Function from requestService.js: listens to Firestore access request updates.
-    const unsubscribe = listenToAccessRequests(
-      (firestoreRequests) => {
-        setRequests(firestoreRequests);
-        setRequestLoadError("");
-      },
-      (error) => {
-        console.error(error);
-        setRequestLoadError("Unable to load access requests.");
-      }
-    );
+    let active = true;
 
-    return unsubscribe;
+    /**
+     * Polls access requests so the admin queue updates without browser Firestore listeners.
+     */
+    const loadLatestAccessRequests = () => {
+      // Function from requestService.js: loads admin access requests from Express.
+      loadAccessRequests()
+        .then((apiRequests) => {
+          if (!active) return;
+          setRequests(apiRequests);
+          setRequestLoadError("");
+        })
+        .catch((error) => {
+          console.error(error);
+          if (active) {
+            setRequestLoadError(error.message || "Unable to load access requests.");
+          }
+        });
+    };
+
+    loadLatestAccessRequests();
+    const intervalId = window.setInterval(loadLatestAccessRequests, 15e3);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
   }, []);
   useEffect(() => {
     // Function from userService.js: listens to active customer profiles for document targeting.
@@ -395,7 +425,10 @@ function AdminDashboard() {
       setRequestLoadError("");
       // Function from requestService.js: asks Express to approve a document access request.
       await approveAccessRequest(id);
-      await refreshAuditLog();
+      await Promise.all([
+        refreshAccessRequests(),
+        refreshAuditLog()
+      ]);
     } catch (error) {
       console.error(error);
       setRequestLoadError(error.message || "Unable to approve request.");
@@ -422,7 +455,10 @@ function AdminDashboard() {
       setRequestLoadError("");
       // Function from requestService.js: asks Express to grant document access again.
       await grantAccessRequest(requestId);
-      await refreshAuditLog();
+      await Promise.all([
+        refreshAccessRequests(),
+        refreshAuditLog()
+      ]);
     } catch (error) {
       console.error(error);
       setRequestLoadError(error.message || "Unable to grant document access.");
@@ -461,7 +497,10 @@ function AdminDashboard() {
       }
 
       setAccessDecision(null);
-      await refreshAuditLog();
+      await Promise.all([
+        refreshAccessRequests(),
+        refreshAuditLog()
+      ]);
     } catch (error) {
       console.error(error);
       setRequestLoadError(
