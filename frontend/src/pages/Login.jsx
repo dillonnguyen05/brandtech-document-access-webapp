@@ -29,13 +29,19 @@ function Login() {
     setError("");
     setLoading(true);
     await new Promise((r) => setTimeout(r, 450));
-    // Function from AuthContext.jsx: checks Firebase login and returns the user's role.
-    const result = await login(email, password);
-    setLoading(false);
-    if (result.success) {
-      navigate(result.role === "admin" ? "/admin" : "/dashboard");
-    } else {
-      setError(result.error || "Login failed.");
+    try {
+      // Function from AuthContext.jsx: checks Firebase login and returns the user's role.
+      const result = await login(email, password);
+      if (result.success) {
+        navigate(result.role === "admin" ? "/admin" : "/dashboard");
+      } else {
+        setError(result.error || "Login failed.");
+      }
+    } catch (error) {
+      console.error(error);
+      setError(error.message || "Login failed.");
+    } finally {
+      setLoading(false);
     }
   };
   return <div className="flex h-screen w-full overflow-hidden">

@@ -7,12 +7,10 @@ import {
   signInWithEmailAndPassword,
   signOut
 } from "firebase/auth";
-import {
-  doc,
-  getDoc
-} from "firebase/firestore";
-// Firebase clients from firebaseConfig.js; AuthContext checks login state and reads user profiles.
-import { auth, db } from "../firebase/firebaseConfig";
+// Firebase client from firebaseConfig.js; AuthContext checks login state and signs users in/out.
+import { auth } from "../firebase/firebaseConfig";
+// Function from authService.js; checks Express profile route for role/status after Firebase login.
+import { loadCurrentUserProfile } from "../services/authService.js";
 // Function from registrationService.js; checks profile data with Express before creating a customer profile.
 import { createCustomerProfile } from "../services/registrationService.js";
 
@@ -67,24 +65,14 @@ function formatFirebaseError(error) {
 }
 
 /**
- * Reads the Firestore user profile for the signed-in Firebase Auth account.
+ * Reads the Express user profile for the signed-in Firebase Auth account.
  * This is where the client blocks pending, denied, revoked, or unverified customers.
  */
 async function loadUserProfile(firebaseUser) {
-  const userRef = doc(db, "users", firebaseUser.uid);
-  const userSnap = await getDoc(userRef);
-
-  if (!userSnap.exists()) {
-    throw authError(
-      "No user profile found. Ask an admin to finish setting up this account.",
-      "auth/profile-missing"
-    );
-  }
-
-  const profileData = userSnap.data();
   const profile = {
     id: firebaseUser.uid,
-    ...profileData,
+    // Function from authService.js: asks Express/Firebase Admin for this user's profile.
+    ...await loadCurrentUserProfile(),
     email: firebaseUser.email,
     emailVerified: firebaseUser.emailVerified
   };

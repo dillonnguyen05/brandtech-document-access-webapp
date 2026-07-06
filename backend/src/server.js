@@ -10,6 +10,7 @@ import accessRequestsRouter, {
   customerAccessRequestsRouter
 } from "./routes/accessRequests.js";
 import adminUsersRouter from "./routes/adminUsers.js";
+import authProfileRouter from "./routes/authProfile.js";
 import auditLogRouter from "./routes/auditLog.js";
 import documentsRouter, {
   documentAccessRouter
@@ -54,6 +55,13 @@ app.get("/api/health", (req, res) => {
     service: "brandtech-api"
   });
 });
+
+// Auth profile route lets React load role/status through Express after Firebase sign-in.
+app.use(
+  "/api/auth",
+  verifyFirebaseToken,
+  authProfileRouter
+);
 
 // Registration starts with a Firebase token, then creates the customer profile through Express.
 app.use(
