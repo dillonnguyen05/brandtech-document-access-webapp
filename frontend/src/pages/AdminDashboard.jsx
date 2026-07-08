@@ -22,7 +22,12 @@ import {
   UserCircle,
   Pencil,
   Trash2,
-  MapPin
+  MapPin,
+  Folder,
+  FolderPlus,
+  UploadCloud,
+  ArrowLeft,
+  ChevronRight
 } from "lucide-react";
 // Function from AuthContext.jsx; checks the current logged-in admin and exposes logout.
 import { useAuth } from "../context/AuthContext";
@@ -31,11 +36,14 @@ import DocumentPreviewModal from "../components/DocumentPreviewModal";
 import logo from "../imports/brandtech.jpg";
 // Functions from documentService.js; check document uploads, metadata edits, deletes, and downloads through Express.
 import {
+  createDocumentFolder,
   deleteDocument,
   downloadDocument,
   loadAdminDocuments,
+  loadDocumentFolders,
   updateDocument,
-  uploadDocument
+  uploadDocument,
+  uploadFolder
 } from "../services/documentService.js";
 // Function from auditService.js; checks the Express audit-log route and returns formatted audit rows.
 import { loadAuditLog } from "../services/auditService.js";
@@ -164,6 +172,56 @@ function registrationLocationMapUrl(location) {
 }
 
 /**
+ * Builds the folder breadcrumb trail for the current document browser location.
+ */
+function buildFolderBreadcrumbs(folders, currentFolderId) {
+  const folderMap = new Map(folders.map((folder) => [folder.id, folder]));
+  const breadcrumbs = [{ id: "", name: "All Documents" }];
+  const trail = [];
+  let folder = folderMap.get(currentFolderId);
+
+  while (folder) {
+    trail.unshift(folder);
+    folder = folderMap.get(folder.parentFolderId);
+  }
+
+  return breadcrumbs.concat(trail.map((item) => ({
+    id: item.id,
+    name: item.name
+  })));
+}
+
+/**
+ * Builds folder select options for upload/edit destinations.
+ */
+function buildFolderOptions(folders) {
+  const sortedFolders = [...folders].sort((a, b) => (
+    (a.path || a.name || "").localeCompare(b.path || b.name || "")
+  ));
+
+  return [
+    { id: "", label: "All Documents" },
+    ...sortedFolders.map((folder) => ({
+      id: folder.id,
+      label: folder.path || folder.name
+    }))
+  ];
+}
+
+/**
+ * Infers the visible file type label from an uploaded file name.
+ */
+function inferDocumentTypeFromFileName(fileName = "") {
+  const lowerName = fileName.toLowerCase();
+
+  if (lowerName.endsWith(".pdf")) return "PDF";
+  if (lowerName.endsWith(".doc") || lowerName.endsWith(".docx")) return "Word";
+  if (lowerName.endsWith(".xls") || lowerName.endsWith(".xlsx")) return "Excel";
+  if (lowerName.endsWith(".ppt") || lowerName.endsWith(".pptx")) return "PowerPoint";
+  return "Other";
+}
+
+/**
  * Main admin shell that loads Express/Firebase data and routes between dashboard sections.
  */
 function AdminDashboard() {
@@ -187,6 +245,8 @@ function AdminDashboard() {
   }, []);
   const [requests, setRequests] = useState([]);
   const [documents, setDocuments] = useState([]);
+  const [folders, setFolders] = useState([]);
+  const [currentFolderId, setCurrentFolderId] = useState("");
   const [auditLog, setAuditLog] = useState([]);
   const [pendingUsers, setPendingUsers] = useState([]);
   const [userApprovalError, setUserApprovalError] = useState("");
@@ -194,12 +254,19 @@ function AdminDashboard() {
   const [updatingUserAction, setUpdatingUserAction] = useState("");
   const [accountDecision, setAccountDecision] = useState(null);
   const [uploadTitle, setUploadTitle] = useState("");
-  const [uploadType, setUploadType] = useState("PDF");
   const [uploadCategory, setUploadCategory] = useState("Safety");
   const [uploadTargetType, setUploadTargetType] = useState("all");
   const [uploadTargetCompany, setUploadTargetCompany] = useState("");
   const [uploadTargetCustomerId, setUploadTargetCustomerId] = useState("");
   const [uploadFile, setUploadFile] = useState(null);
+  const [folderName, setFolderName] = useState("");
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [folderUploadFiles, setFolderUploadFiles] = useState([]);
+  const [folderUploading, setFolderUploading] = useState(false);
+  const [folderUploadProgress, setFolderUploadProgress] = useState(0);
+  const [folderUploadDone, setFolderUploadDone] = useState(false);
+  const [folderUploadSummary, setFolderUploadSummary] = useState(null);
+  const [folderActionError, setFolderActionError] = useState("");
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [uploadDone, setUploadDone] = useState(false);
@@ -214,10 +281,16 @@ function AdminDashboard() {
   const [editingDocument, setEditingDocument] = useState(null);
   const [accessDecision, setAccessDecision] = useState(null);
   const fileRef = useRef(null);
+  const folderFileRef = useRef(null);
   const activeCompanies = Array.from(
     new Set(activeCustomers.map((customer) => customer.company).filter(Boolean))
   ).sort((a, b) => a.localeCompare(b));
   const selectedTargetCustomer = activeCustomers.find((customer) => customer.id === uploadTargetCustomerId);
+  const currentFolder = folders.find((folder) => folder.id === currentFolderId);
+  const folderOptions = buildFolderOptions(folders);
+  const folderBreadcrumbs = buildFolderBreadcrumbs(folders, currentFolderId);
+  const visibleFolders = folders.filter((folder) => folder.parentFolderId === currentFolderId);
+  const visibleDocuments = documents.filter((document) => (document.folderId || "") === currentFolderId);
 
   /**
    * Reloads admin document metadata after upload, edit, or delete actions.
@@ -231,6 +304,21 @@ function AdminDashboard() {
     } catch (error) {
       console.error(error);
       setDocumentLoadError(error.message || "Unable to load uploaded documents.");
+    }
+  }, []);
+
+  /**
+   * Reloads document folder metadata after folder creation or folder upload.
+   */
+  const refreshFolders = useCallback(async () => {
+    try {
+      // Function from documentService.js: loads folder metadata from Express.
+      const apiFolders = await loadDocumentFolders();
+      setFolders(apiFolders);
+      setFolderActionError("");
+    } catch (error) {
+      console.error(error);
+      setFolderActionError(error.message || "Unable to load document folders.");
     }
   }, []);
 
@@ -336,12 +424,18 @@ function AdminDashboard() {
   useEffect(() => {
     let active = true;
 
-    // Function from documentService.js: loads admin document metadata from Express.
-    loadAdminDocuments()
-      .then((apiDocuments) => {
+    Promise.all([
+      // Function from documentService.js: loads admin document metadata from Express.
+      loadAdminDocuments(),
+      // Function from documentService.js: loads folder metadata from Express.
+      loadDocumentFolders()
+    ])
+      .then(([apiDocuments, apiFolders]) => {
         if (!active) return;
         setDocuments(apiDocuments);
+        setFolders(apiFolders);
         setDocumentLoadError("");
+        setFolderActionError("");
       })
       .catch((error) => {
         console.error(error);
@@ -573,7 +667,6 @@ function AdminDashboard() {
         uploadFile,
         {
           title: uploadTitle,
-          type: uploadType,
           category: uploadCategory,
           targetType: uploadTargetType,
           targetCustomer: uploadTargetType === "all"
@@ -584,7 +677,8 @@ function AdminDashboard() {
           targetCompany: uploadTargetType === "company" ? uploadTargetCompany : "",
           targetCustomerId: uploadTargetType === "customer" ? uploadTargetCustomerId : "",
           targetCustomerName: uploadTargetType === "customer" ? selectedTargetCustomer?.name || "" : "",
-          targetCustomerEmail: uploadTargetType === "customer" ? selectedTargetCustomer?.email || "" : ""
+          targetCustomerEmail: uploadTargetType === "customer" ? selectedTargetCustomer?.email || "" : "",
+          folderId: currentFolderId
         },
         setUploadProgress
       );
@@ -603,6 +697,101 @@ function AdminDashboard() {
       setUploadError(error.message || "Unable to upload document.");
     } finally {
       setUploading(false);
+    }
+  };
+
+  /**
+   * Creates a folder under the current document browser location.
+   */
+  const handleCreateFolder = async (event) => {
+    event.preventDefault();
+
+    if (!folderName.trim()) {
+      setFolderActionError("Folder name is required.");
+      return;
+    }
+
+    setCreatingFolder(true);
+    setFolderActionError("");
+
+    try {
+      // Function from documentService.js: creates a folder through Express.
+      await createDocumentFolder(folderName, currentFolderId);
+      setFolderName("");
+      await Promise.all([
+        refreshFolders(),
+        refreshAuditLog()
+      ]);
+    } catch (error) {
+      console.error(error);
+      setFolderActionError(error.message || "Unable to create folder.");
+    } finally {
+      setCreatingFolder(false);
+    }
+  };
+
+  /**
+   * Uploads all supported files from a selected browser folder.
+   */
+  const handleFolderUpload = async (event) => {
+    event.preventDefault();
+
+    if (folderUploadFiles.length === 0) {
+      setFolderActionError("Please select a folder.");
+      return;
+    }
+
+    if (uploadTargetType === "company" && !uploadTargetCompany) {
+      setFolderActionError("Select a target company.");
+      return;
+    }
+
+    if (uploadTargetType === "customer" && !uploadTargetCustomerId) {
+      setFolderActionError("Select a target customer.");
+      return;
+    }
+
+    setFolderUploading(true);
+    setFolderUploadProgress(0);
+    setFolderUploadDone(false);
+    setFolderUploadSummary(null);
+    setFolderActionError("");
+
+    try {
+      // Function from documentService.js: uploads a folder and creates document metadata through Express.
+      const folderUploadResult = await uploadFolder(
+        folderUploadFiles,
+        {
+          category: uploadCategory,
+          targetType: uploadTargetType,
+          targetCompany: uploadTargetType === "company" ? uploadTargetCompany : "",
+          targetCustomerId: uploadTargetType === "customer" ? uploadTargetCustomerId : "",
+          parentFolderId: currentFolderId
+        },
+        setFolderUploadProgress
+      );
+
+      setFolderUploadDone(true);
+      setFolderUploadSummary({
+        uploadedCount: folderUploadResult.documents.length,
+        skippedFiles: folderUploadResult.skippedFiles || []
+      });
+      setFolderUploadFiles([]);
+      if (folderFileRef.current) folderFileRef.current.value = "";
+      await Promise.all([
+        refreshDocuments(),
+        refreshFolders(),
+        refreshAuditLog()
+      ]);
+      setTimeout(() => {
+        setFolderUploadDone(false);
+        setFolderUploadSummary(null);
+      }, folderUploadResult.skippedFiles?.length ? 8e3 : 3e3);
+    } catch (error) {
+      console.error(error);
+      setFolderActionError(error.message || "Unable to upload folder.");
+    } finally {
+      setFolderUploading(false);
     }
   };
 
@@ -978,10 +1167,15 @@ function AdminDashboard() {
   />}
           {section === "documents" && <DocumentsContent
     documents={documents}
+    visibleDocuments={visibleDocuments}
+    visibleFolders={visibleFolders}
+    folderBreadcrumbs={folderBreadcrumbs}
+    folderOptions={folderOptions}
+    currentFolder={currentFolder}
+    currentFolderId={currentFolderId}
+    setCurrentFolderId={setCurrentFolderId}
     uploadTitle={uploadTitle}
     setUploadTitle={setUploadTitle}
-    uploadType={uploadType}
-    setUploadType={setUploadType}
     uploadCategory={uploadCategory}
     setUploadCategory={setUploadCategory}
     uploadTargetType={uploadTargetType}
@@ -995,6 +1189,16 @@ function AdminDashboard() {
     activeCustomerError={activeCustomerError}
     uploadFile={uploadFile}
     setUploadFile={setUploadFile}
+    folderName={folderName}
+    setFolderName={setFolderName}
+    creatingFolder={creatingFolder}
+    folderUploadFiles={folderUploadFiles}
+    setFolderUploadFiles={setFolderUploadFiles}
+    folderUploading={folderUploading}
+    folderUploadProgress={folderUploadProgress}
+    folderUploadDone={folderUploadDone}
+    folderUploadSummary={folderUploadSummary}
+    folderActionError={folderActionError}
     uploadProgress={uploadProgress}
     uploading={uploading}
     uploadDone={uploadDone}
@@ -1006,7 +1210,10 @@ function AdminDashboard() {
     onEditDocument={setEditingDocument}
     onDeleteDocument={handleDeleteDocument}
     fileRef={fileRef}
+    folderFileRef={folderFileRef}
     onUpload={handleUpload}
+    onCreateFolder={handleCreateFolder}
+    onUploadFolder={handleFolderUpload}
   />}
           {section === "requests" && <RequestsContent requests={requests} error={requestLoadError} onApprove={approveRequest} onDeny={denyRequest} />}
           {section === "users" && <UserApprovalsContent
@@ -1029,6 +1236,7 @@ function AdminDashboard() {
       {editingDocument && <DocumentEditModal
     key={editingDocument.id}
     document={editingDocument}
+    folderOptions={folderOptions}
     activeCustomers={activeCustomers}
     activeCompanies={activeCompanies}
     onClose={() => setEditingDocument(null)}
@@ -1152,10 +1360,15 @@ function DashboardContent({
  */
 function DocumentsContent({
   documents,
+  visibleDocuments,
+  visibleFolders,
+  folderBreadcrumbs,
+  folderOptions,
+  currentFolder,
+  currentFolderId,
+  setCurrentFolderId,
   uploadTitle,
   setUploadTitle,
-  uploadType,
-  setUploadType,
   uploadCategory,
   setUploadCategory,
   uploadTargetType,
@@ -1169,6 +1382,16 @@ function DocumentsContent({
   activeCustomerError,
   uploadFile,
   setUploadFile,
+  folderName,
+  setFolderName,
+  creatingFolder,
+  folderUploadFiles,
+  setFolderUploadFiles,
+  folderUploading,
+  folderUploadProgress,
+  folderUploadDone,
+  folderUploadSummary,
+  folderActionError,
   uploadProgress,
   uploading,
   uploadDone,
@@ -1180,16 +1403,51 @@ function DocumentsContent({
   onEditDocument,
   onDeleteDocument,
   fileRef,
-  onUpload
+  folderFileRef,
+  onUpload,
+  onCreateFolder,
+  onUploadFolder
 }) {
+  const folderUploadLabel = folderUploadFiles.length > 0
+    ? `${folderUploadFiles.length} files selected`
+    : "Click to select a folder";
+  const folderLocationLabel = currentFolder?.path || "All Documents";
+  const parentFolderId = currentFolder?.parentFolderId || "";
+  const inferredUploadType = uploadFile ? inferDocumentTypeFromFileName(uploadFile.name) : "Select a file";
+  const skippedFolderFiles = folderUploadSummary?.skippedFiles || [];
+
   return <div className="space-y-6">
       {
     /* Upload form */
   }
       <div className="bg-white rounded-xl border border-gray-100 p-6">
-        <h3 className="text-sm mb-4" style={{ color: BS_BLACK, fontWeight: 600 }}>
-          Upload Document
-        </h3>
+        <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>
+              Upload Document
+            </h3>
+            <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
+              Destination: {folderLocationLabel}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {folderBreadcrumbs.map((breadcrumb, index) => <div key={breadcrumb.id || "root"} className="flex items-center gap-1.5">
+                {index > 0 && <ChevronRight size={12} style={{ color: "#C4C9CE" }} />}
+                <button
+    type="button"
+    onClick={() => setCurrentFolderId(breadcrumb.id)}
+    className="px-2.5 py-1 rounded-lg text-xs border transition-colors hover:bg-gray-50"
+    style={{
+      borderColor: breadcrumb.id === currentFolderId ? BS_GOLD : "#E5E7EB",
+      color: breadcrumb.id === currentFolderId ? BS_BLACK : BS_GRAY,
+      fontWeight: breadcrumb.id === currentFolderId ? 600 : 500
+    }}
+  >
+                  {breadcrumb.name}
+                </button>
+              </div>)}
+          </div>
+        </div>
         <form onSubmit={onUpload} className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="block text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 500 }}>Document Title *</label>
@@ -1204,15 +1462,20 @@ function DocumentsContent({
   />
           </div>
           <div>
-            <label className="block text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 500 }}>Document Type</label>
+            <label className="block text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 500 }}>File Destination</label>
             <select
-    value={uploadType}
-    onChange={(e) => setUploadType(e.target.value)}
+    value={currentFolderId}
+    onChange={(e) => setCurrentFolderId(e.target.value)}
     className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
     style={{ color: BS_BLACK }}
   >
-              {["PDF", "Word", "Excel", "PowerPoint", "Other"].map((t) => <option key={t}>{t}</option>)}
+              {folderOptions.map((folderOption) => <option key={folderOption.id || "root"} value={folderOption.id}>
+                  {folderOption.label}
+                </option>)}
             </select>
+            <p className="text-xs mt-1" style={{ color: "#9CA3AF" }}>
+              Uploads and new folders use this destination.
+            </p>
           </div>
           <div>
             <label className="block text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 500 }}>Category</label>
@@ -1290,7 +1553,9 @@ function DocumentsContent({
               <p className="text-sm" style={{ color: BS_GRAY }}>
                 {uploadFile ? uploadFile.name : "Click to select a file"}
               </p>
-              <p className="text-xs mt-1" style={{ color: "#9CA3AF" }}>PDF, Word, Excel up to 50MB</p>
+              <p className="text-xs mt-1" style={{ color: "#9CA3AF" }}>
+                PDF, Word, Excel, PowerPoint up to 50MB · Type: {inferredUploadType}
+              </p>
             </div>
             <input
     ref={fileRef}
@@ -1335,15 +1600,130 @@ function DocumentsContent({
             </button>
           </div>
         </form>
+
+        <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-4 border-t border-gray-100 pt-5">
+          <form onSubmit={onCreateFolder} className="rounded-lg border border-gray-100 bg-gray-50 p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <FolderPlus size={16} style={{ color: BS_GOLD }} />
+              <h4 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Create Folder</h4>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+    type="text"
+    value={folderName}
+    onChange={(event) => setFolderName(event.target.value)}
+    placeholder="Folder name"
+    className="flex-1 px-3 py-2.5 rounded-lg border border-gray-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
+    style={{ color: BS_BLACK }}
+  />
+              <button
+    type="submit"
+    disabled={creatingFolder}
+    className="px-4 py-2.5 rounded-lg text-sm transition-opacity disabled:opacity-50 hover:opacity-90"
+    style={{ backgroundColor: BS_BLACK, color: "#FFFFFF", fontWeight: 600 }}
+  >
+                {creatingFolder ? "Creating..." : "Create"}
+              </button>
+            </div>
+          </form>
+
+          <form onSubmit={onUploadFolder} className="rounded-lg border border-gray-100 bg-gray-50 p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <UploadCloud size={16} style={{ color: BS_GOLD }} />
+              <h4 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Upload Folder</h4>
+            </div>
+            <div
+    className="border border-dashed rounded-lg bg-white p-4 text-center cursor-pointer hover:border-[#F2A900] transition-colors"
+    style={{ borderColor: "#D1D5DB" }}
+    onClick={() => folderFileRef.current?.click()}
+  >
+              <UploadCloud size={18} className="mx-auto mb-2" style={{ color: "#9CA3AF" }} />
+              <p className="text-sm" style={{ color: BS_GRAY }}>{folderUploadLabel}</p>
+              <p className="text-xs mt-1" style={{ color: "#9CA3AF" }}>PDF, Word, Excel, PowerPoint</p>
+            </div>
+            <input
+    ref={folderFileRef}
+    type="file"
+    className="hidden"
+    accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
+    multiple
+    webkitdirectory="true"
+    directory=""
+    onChange={(event) => setFolderUploadFiles(Array.from(event.target.files || []))}
+  />
+            {folderUploading && <div className="mt-3">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs" style={{ color: BS_GRAY }}>Uploading folder...</span>
+                  <span className="text-xs" style={{ color: BS_GRAY }}>{folderUploadProgress}%</span>
+                </div>
+                <div className="h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: "#E9EAEC" }}>
+                  <div
+    className="h-full rounded-full transition-all"
+    style={{ width: `${folderUploadProgress}%`, backgroundColor: BS_GOLD }}
+  />
+                </div>
+              </div>}
+            {folderUploadDone && <div className="mt-3 rounded-lg border border-green-100 bg-green-50 px-3 py-2 text-sm text-green-700">
+                <div className="flex items-center gap-2">
+                  <CheckCircle size={16} />
+                  <span>
+                    Uploaded {folderUploadSummary?.uploadedCount || 0} documents.
+                    {skippedFolderFiles.length > 0 ? ` Skipped ${skippedFolderFiles.length} files.` : ""}
+                  </span>
+                </div>
+              </div>}
+            {skippedFolderFiles.length > 0 && <div
+    className="mt-3 rounded-lg border px-3 py-2 text-xs"
+    style={{ backgroundColor: "rgba(242,169,0,0.08)", borderColor: "rgba(242,169,0,0.22)", color: BS_GRAY }}
+  >
+                <p style={{ color: "#A37200", fontWeight: 600 }}>
+                  Skipped unsupported or oversized files
+                </p>
+                <ul className="mt-1.5 space-y-1">
+                  {skippedFolderFiles.slice(0, 5).map((file) => <li key={`${file.name}-${file.reason}`} className="truncate">
+                      {file.name} — {file.reason}
+                    </li>)}
+                </ul>
+                {skippedFolderFiles.length > 5 && <p className="mt-1.5">
+                    +{skippedFolderFiles.length - 5} more skipped files
+                  </p>}
+              </div>}
+            <button
+    type="submit"
+    disabled={folderUploading}
+    className="mt-3 px-4 py-2.5 rounded-lg text-sm transition-opacity disabled:opacity-50 hover:opacity-90"
+    style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 600 }}
+  >
+              {folderUploading ? "Uploading..." : "Upload Folder"}
+            </button>
+          </form>
+        </div>
+
+        {folderActionError && <div className="mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
+            {folderActionError}
+          </div>}
       </div>
 
       {
     /* Document list */
   }
       <div className="bg-white rounded-xl border border-gray-100">
-        <div className="px-5 py-4 border-b border-gray-100">
-          <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>All Documents</h3>
-          <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>{documents.length} documents on record</p>
+        <div className="px-5 py-4 border-b border-gray-100 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>{folderLocationLabel}</h3>
+            <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
+              {documents.length} total documents · {visibleFolders.length} folders · {visibleDocuments.length} documents here
+            </p>
+          </div>
+          {currentFolderId && <button
+    type="button"
+    onClick={() => setCurrentFolderId(parentFolderId)}
+    className="inline-flex items-center gap-1.5 self-start sm:self-auto px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
+    style={{ borderColor: "#D1D5DB", color: BS_GRAY, fontWeight: 600 }}
+  >
+              <ArrowLeft size={12} />
+              Back
+            </button>}
         </div>
         {documentLoadError && <div className="mx-5 mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
             {documentLoadError}
@@ -1361,8 +1741,46 @@ function DocumentsContent({
               </tr>
             </thead>
             <tbody>
-              {documents.map((doc, i) => <tr key={doc.id} style={{ borderBottom: i < documents.length - 1 ? "1px solid #F3F4F6" : "none" }}>
-                  <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>{doc.title}</td>
+              {visibleFolders.map((folderItem) => <tr key={`folder-${folderItem.id}`} style={{ borderBottom: "1px solid #F3F4F6" }}>
+                  <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>
+                    <button
+    type="button"
+    onClick={() => setCurrentFolderId(folderItem.id)}
+    className="inline-flex items-center gap-2 text-left hover:opacity-80"
+    style={{ fontWeight: 600 }}
+  >
+                      <Folder size={15} style={{ color: BS_GOLD }} />
+                      {folderItem.name}
+                    </button>
+                  </td>
+                  <td className="px-4 py-3.5">
+                    <span className="text-xs px-2 py-0.5 rounded" style={{ backgroundColor: "rgba(242,169,0,0.12)", color: "#A37200" }}>
+                      Folder
+                    </span>
+                  </td>
+                  <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>—</td>
+                  <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>—</td>
+                  <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{folderItem.createdDate}</td>
+                  <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>—</td>
+                  <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{folderItem.createdByName || "Admin"}</td>
+                  <td className="px-4 py-3.5">
+                    <button
+    type="button"
+    onClick={() => setCurrentFolderId(folderItem.id)}
+    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
+    style={{ borderColor: "#D1D5DB", color: BS_GRAY }}
+  >
+                      Open <ChevronRight size={11} />
+                    </button>
+                  </td>
+                </tr>)}
+              {visibleDocuments.map((doc, i) => <tr key={doc.id} style={{ borderBottom: i < visibleDocuments.length - 1 ? "1px solid #F3F4F6" : "none" }}>
+                  <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>
+                    <span className="inline-flex items-center gap-2">
+                      <FileText size={14} style={{ color: BS_GRAY }} />
+                      {doc.title}
+                    </span>
+                  </td>
                   <td className="px-4 py-3.5">
                     <span className="text-xs px-2 py-0.5 rounded" style={{ backgroundColor: "#F3F4F6", color: BS_GRAY }}>
                       {doc.category}
@@ -1414,6 +1832,11 @@ function DocumentsContent({
 		                    </div>
 	                  </td>
 	                </tr>)}
+              {visibleFolders.length === 0 && visibleDocuments.length === 0 && <tr>
+                  <td colSpan={8} className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
+                    No folders or documents in this location.
+                  </td>
+                </tr>}
 	            </tbody>
 	          </table>
         </div>
@@ -2045,6 +2468,7 @@ function AuditContent({ auditLog, error, onRevoke, onGrant, requests }) {
  */
 function DocumentEditModal({
   document,
+  folderOptions,
   activeCustomers,
   activeCompanies,
   onClose,
@@ -2052,8 +2476,8 @@ function DocumentEditModal({
 }) {
   const [form, setForm] = useState({
     title: document.title || "",
-    type: document.type || "Other",
     category: document.category || "Other",
+    folderId: document.folderId || "",
     targetType: document.targetType || "all",
     targetCompany: document.targetCompany || "",
     targetCustomerId: document.targetCustomerId || ""
@@ -2115,16 +2539,24 @@ function DocumentEditModal({
   />
           </div>
           <div>
-            <label className="block text-xs mb-1.5" style={{ color: BS_GRAY }}>Type</label>
-            <select value={form.type} onChange={update("type")} className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm">
-              {["PDF", "Word", "Excel", "PowerPoint", "Other"].map((type) => <option key={type}>{type}</option>)}
+            <label className="block text-xs mb-1.5" style={{ color: BS_GRAY }}>File Destination</label>
+            <select value={form.folderId} onChange={update("folderId")} className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm">
+              {folderOptions.map((folderOption) => <option key={folderOption.id || "root"} value={folderOption.id}>
+                  {folderOption.label}
+                </option>)}
             </select>
+            <p className="text-xs mt-1" style={{ color: "#9CA3AF" }}>
+              Moves this document in the admin folder list.
+            </p>
           </div>
           <div>
             <label className="block text-xs mb-1.5" style={{ color: BS_GRAY }}>Category</label>
             <select value={form.category} onChange={update("category")} className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm">
               {["Safety", "Technical", "Compliance", "Operations", "Legal", "Other"].map((category) => <option key={category}>{category}</option>)}
             </select>
+            <p className="text-xs mt-1" style={{ color: "#9CA3AF" }}>
+              Type is automatic: {document.type || inferDocumentTypeFromFileName(document.fileName)}
+            </p>
           </div>
           <div className="sm:col-span-2">
             <label className="block text-xs mb-1.5" style={{ color: BS_GRAY }}>Target Audience</label>
