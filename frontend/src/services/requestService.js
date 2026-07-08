@@ -2,18 +2,22 @@
 import { apiRequest } from "./apiClient.js";
 
 /**
- * Creates or resubmits a customer document access request.
+ * Creates or resubmits a customer document/folder access request.
  */
-export async function createAccessRequest(document) {
-  if (!document?.id) {
-    throw new Error("Select a document before requesting access.");
+export async function createAccessRequest(resource) {
+  if (!resource?.id) {
+    throw new Error("Select a document or folder before requesting access.");
   }
+
+  const resourceType = resource.resourceType === "folder" ? "folder" : "document";
 
   // Function from apiClient.js: checks Firebase sign-in and sends the customer access request to Express.
   return apiRequest("/api/access-requests", {
     method: "POST",
     body: JSON.stringify({
-      documentId: document.id
+      resourceType,
+      documentId: resourceType === "document" ? resource.id : "",
+      folderId: resourceType === "folder" ? resource.id : ""
     })
   });
 }

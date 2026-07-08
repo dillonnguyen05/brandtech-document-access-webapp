@@ -274,6 +274,19 @@ export async function loadCustomerDocuments() {
 }
 
 /**
+ * Loads approved customer documents plus requestable folder metadata.
+ */
+export async function loadCustomerDocumentLibrary() {
+  // Function from apiClient.js: checks Firebase sign-in and loads customer documents/folders from Express.
+  const result = await apiRequest("/api/documents");
+
+  return {
+    documents: (result.documents || []).map(formatDocument),
+    folders: (result.folders || []).map(formatFolder)
+  };
+}
+
+/**
  * Updates document metadata and targeting rules.
  */
 export async function updateDocument(documentId, documentData) {

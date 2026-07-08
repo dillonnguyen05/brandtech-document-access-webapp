@@ -13,10 +13,12 @@ import {
   XCircle,
   Clock,
   ChevronRight,
+  ArrowLeft,
   AlertCircle,
   Camera,
   Settings,
-  Trash2
+  Trash2,
+  Folder
 } from "lucide-react";
 // Function from AuthContext.jsx; checks the current logged-in customer and exposes logout.
 import { useAuth } from "../context/AuthContext";
@@ -25,7 +27,7 @@ import DocumentPreviewModal from "../components/DocumentPreviewModal";
 // Functions from documentService.js; check visible customer documents and approved downloads through Express.
 import {
   downloadDocument,
-  loadCustomerDocuments
+  loadCustomerDocumentLibrary
 } from "../services/documentService.js";
 // Functions from requestService.js; check customer access request creation and request history through Express.
 import {
@@ -96,6 +98,53 @@ function documentTargetsCustomer(document, user) {
 }
 
 /**
+ * Checks if a folder contains a document directly or through a subfolder.
+ */
+function folderContainsDocument(folder, document) {
+  const folderPath = folder.path || "";
+  const documentFolderPath = document.folderPath || "";
+
+  if (!folderPath) return true;
+
+  return documentFolderPath === folderPath
+    || documentFolderPath.startsWith(`${folderPath}/`);
+}
+
+/**
+ * Checks if a folder request covers this folder or one of its subfolders.
+ */
+function folderCoveredByRequest(folder, request) {
+  const requestFolderPath = request.folderPath || "";
+  const folderPath = folder.path || "";
+
+  if (request.folderId === folder.id) return true;
+  if (!requestFolderPath) return false;
+
+  return folderPath === requestFolderPath
+    || folderPath.startsWith(`${requestFolderPath}/`);
+}
+
+/**
+ * Builds breadcrumbs for customer folder browsing.
+ */
+function buildFolderBreadcrumbs(folders, currentFolderId) {
+  const folderMap = new Map(folders.map((folder) => [folder.id, folder]));
+  const breadcrumbs = [{ id: "", name: "All Documents" }];
+  const trail = [];
+  let folder = folderMap.get(currentFolderId);
+
+  while (folder) {
+    trail.unshift(folder);
+    folder = folderMap.get(folder.parentFolderId);
+  }
+
+  return breadcrumbs.concat(trail.map((item) => ({
+    id: item.id,
+    name: item.name
+  })));
+}
+
+/**
  * Main customer shell that loads documents, requests, notifications, and route sections.
  */
 function CustomerDashboard() {
@@ -103,6 +152,9 @@ function CustomerDashboard() {
   const navigate = useNavigate();
   const [section, setSection] = useState("dashboard");
   const [documents, setDocuments] = useState([]);
+  const [folders, setFolders] = useState([]);
+  const [documentFolderId, setDocumentFolderId] = useState("");
+  const [requestFolderId, setRequestFolderId] = useState("");
   const [myRequests, setMyRequests] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [documentLoadError, setDocumentLoadError] = useState("");
@@ -112,35 +164,77 @@ function CustomerDashboard() {
   const [updatingNotificationId, setUpdatingNotificationId] = useState("");
   const [previewDocument, setPreviewDocument] = useState(null);
   const customerDocuments = documents.filter((document) => documentTargetsCustomer(document, user));
-  const approvedDocIds = new Set(
-    myRequests.filter((r) => r.status === "approved").map((r) => r.documentId)
-  );
-  const activeRequestDocIds = new Set(
-    myRequests.filter((r) => r.status === "pending" || r.status === "approved").map((r) => r.documentId)
-  );
-  const approvedDocs = customerDocuments.filter((doc) => approvedDocIds.has(doc.id));
-  const availableDocs = customerDocuments.filter((doc) => !activeRequestDocIds.has(doc.id));
+  const folderRequests = myRequests.filter((request) => request.resourceType === "folder");
+  const activeFolderRequests = folderRequests.filter((request) => (
+    request.status === "pending" || request.status === "approved"
+  ));
+  const pendingFolderRequests = folderRequests.filter((request) => request.status === "pending");
+  const approvedFolderRequests = folderRequests.filter((request) => request.status === "approved");
+  const folderStatus = (folder) => {
+    if (approvedFolderRequests.some((request) => folderCoveredByRequest(folder, request))) {
+      return "approved";
+    }
+
+    if (pendingFolderRequests.some((request) => folderCoveredByRequest(folder, request))) {
+      return "pending";
+    }
+
+    return "";
+  };
+  const requestableFolders = folders.filter((folder) => !activeFolderRequests.some((request) => (
+    folderCoveredByRequest(folder, request)
+  )));
+  const approvedDocs = customerDocuments;
+  const approvedFolders = folders.filter((folder) => (
+    approvedDocs.some((document) => folderContainsDocument(folder, document))
+  ));
+  const documentBreadcrumbs = buildFolderBreadcrumbs(approvedFolders, documentFolderId);
+  const requestBreadcrumbs = buildFolderBreadcrumbs(folders, requestFolderId);
+  const currentDocumentFolder = approvedFolders.find((folder) => folder.id === documentFolderId);
+  const currentRequestFolder = folders.find((folder) => folder.id === requestFolderId);
+  const visibleApprovedFolders = approvedFolders.filter((folder) => (
+    folder.parentFolderId === documentFolderId
+  ));
+  const visibleApprovedDocs = approvedDocs.filter((document) => (
+    (document.folderId || "") === documentFolderId
+  ));
+  const visibleRequestFolders = folders.filter((folder) => (
+    folder.parentFolderId === requestFolderId
+  ));
+  const availableFolderPreview = requestableFolders.filter((folder) => (
+    !folder.parentFolderId
+  ));
   const unreadCount = notifications.filter((n) => !n.read).length;
 
   useEffect(() => {
     let active = true;
 
-    // Function from documentService.js: loads documents visible to this customer from Express.
-    loadCustomerDocuments()
-      .then((apiDocuments) => {
-        if (!active) return;
-        setDocuments(apiDocuments);
-        setDocumentLoadError("");
-      })
-      .catch((error) => {
-        console.error(error);
-        if (active) {
-          setDocumentLoadError(error.message || "Unable to load documents.");
-        }
-      });
+    /**
+     * Polls approved documents and requestable folders through Express.
+     */
+    const loadLatestDocumentLibrary = () => {
+      // Function from documentService.js: loads approved documents and folders from Express.
+      loadCustomerDocumentLibrary()
+        .then((library) => {
+          if (!active) return;
+          setDocuments(library.documents);
+          setFolders(library.folders);
+          setDocumentLoadError("");
+        })
+        .catch((error) => {
+          console.error(error);
+          if (active) {
+            setDocumentLoadError(error.message || "Unable to load documents.");
+          }
+        });
+    };
+
+    loadLatestDocumentLibrary();
+    const intervalId = window.setInterval(loadLatestDocumentLibrary, 15e3);
 
     return () => {
       active = false;
+      window.clearInterval(intervalId);
     };
   }, []);
   useEffect(() => {
@@ -217,22 +311,27 @@ function CustomerDashboard() {
   };
 
   /**
-   * Creates a new access request for the selected document.
+   * Creates a new access request for the selected document or folder.
    */
-  const requestAccess = async (document) => {
+  const requestAccess = async (resource) => {
     setRequestActionError("");
 
     try {
-      // Function from requestService.js: asks Express to create a document access request.
-      await createAccessRequest(document);
-      // Function from requestService.js: reloads request history so My Requests updates immediately.
-      const apiRequests = await loadCustomerRequests();
+      // Function from requestService.js: asks Express to create a document/folder access request.
+      await createAccessRequest(resource);
+      // Functions from requestService.js/documentService.js: reload request history and folder library immediately.
+      const [apiRequests, library] = await Promise.all([
+        loadCustomerRequests(),
+        loadCustomerDocumentLibrary()
+      ]);
       setMyRequests(apiRequests);
+      setDocuments(library.documents);
+      setFolders(library.folders);
       setSection("requests");
       setRequestLoadError("");
     } catch (error) {
       console.error(error);
-      setRequestActionError(error.message || "Unable to request document access.");
+      setRequestActionError(error.message || "Unable to request access.");
       setSection("requests");
     }
   };
@@ -469,7 +568,7 @@ function CustomerDashboard() {
     user={user}
     approvedDocs={approvedDocs}
     myRequests={myRequests}
-    availableDocs={availableDocs}
+    availableFolders={availableFolderPreview}
     notifications={notifications}
     onRequestAccess={requestAccess}
     onPreviewDocument={setPreviewDocument}
@@ -478,13 +577,24 @@ function CustomerDashboard() {
   />}
           {section === "documents" && <DocumentsSection
     approvedDocs={approvedDocs}
+    visibleApprovedDocs={visibleApprovedDocs}
+    visibleApprovedFolders={visibleApprovedFolders}
+    documentBreadcrumbs={documentBreadcrumbs}
+    currentDocumentFolder={currentDocumentFolder}
+    documentFolderId={documentFolderId}
+    setDocumentFolderId={setDocumentFolderId}
     documentLoadError={documentLoadError}
     onPreviewDocument={setPreviewDocument}
     onDownloadDocument={handleDownloadDocument}
   />}
           {section === "requests" && <RequestsSection
     myRequests={myRequests}
-    availableDocs={availableDocs}
+    visibleRequestFolders={visibleRequestFolders}
+    requestBreadcrumbs={requestBreadcrumbs}
+    currentRequestFolder={currentRequestFolder}
+    requestFolderId={requestFolderId}
+    setRequestFolderId={setRequestFolderId}
+    folderStatus={folderStatus}
     requestLoadError={requestLoadError}
     requestActionError={requestActionError}
     onRequestAccess={requestAccess}
@@ -550,7 +660,7 @@ function DashboardHome({
   user,
   approvedDocs,
   myRequests,
-  availableDocs,
+  availableFolders,
   notifications,
   onRequestAccess,
   onPreviewDocument,
@@ -655,9 +765,9 @@ function DashboardHome({
       {
     /* Available docs preview */
   }
-      {availableDocs.length > 0 && <div className="bg-white rounded-xl border border-gray-100">
+      {availableFolders.length > 0 && <div className="bg-white rounded-xl border border-gray-100">
           <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-            <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Available to Request</h3>
+            <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Folders Available to Request</h3>
             <button
     onClick={() => onNavigate("requests")}
     className="flex items-center gap-1 text-xs hover:underline"
@@ -666,21 +776,28 @@ function DashboardHome({
               View all <ChevronRight size={12} />
             </button>
           </div>
-          {availableDocs.slice(0, 3).map((doc, i) => <div
-    key={doc.id}
+          {availableFolders.slice(0, 3).map((folder, i) => <div
+    key={folder.id}
     className="flex items-center justify-between px-5 py-4"
-    style={{ borderBottom: i < Math.min(availableDocs.length, 3) - 1 ? "1px solid #F3F4F6" : "none" }}
+    style={{ borderBottom: i < Math.min(availableFolders.length, 3) - 1 ? "1px solid #F3F4F6" : "none" }}
   >
-              <div>
-                <p className="text-sm" style={{ color: BS_BLACK, fontWeight: 500 }}>{doc.title}</p>
-                <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>{doc.category} · {doc.uploadedDate}</p>
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg" style={{ backgroundColor: "rgba(242,169,0,0.12)" }}>
+                  <Folder size={14} style={{ color: BS_GOLD }} />
+                </div>
+                <div>
+                  <p className="text-sm" style={{ color: BS_BLACK, fontWeight: 500 }}>{folder.path || folder.name}</p>
+                  <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
+                    {folder.requestableDocumentCount || 0} document{folder.requestableDocumentCount === 1 ? "" : "s"} in scope
+                  </p>
+                </div>
 	              </div>
 	              <button
-	    onClick={() => onRequestAccess(doc)}
+	    onClick={() => onRequestAccess({ ...folder, resourceType: "folder" })}
 	    className="px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
 	    style={{ borderColor: BS_BLACK, color: BS_BLACK }}
 	  >
-                Request Access
+                Request Folder
               </button>
             </div>)}
         </div>}
@@ -691,16 +808,55 @@ function DashboardHome({
  */
 function DocumentsSection({
   approvedDocs,
+  visibleApprovedDocs,
+  visibleApprovedFolders,
+  documentBreadcrumbs,
+  currentDocumentFolder,
+  documentFolderId,
+  setDocumentFolderId,
   documentLoadError,
   onPreviewDocument,
   onDownloadDocument
 }) {
+  const folderLocationLabel = currentDocumentFolder?.path || "All Documents";
+  const parentFolderId = currentDocumentFolder?.parentFolderId || "";
+
   return <div className="bg-white rounded-xl border border-gray-100">
-      <div className="px-5 py-4 border-b border-gray-100">
-        <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Approved Documents</h3>
-        <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
-          {approvedDocs.length} document{approvedDocs.length !== 1 ? "s" : ""} available to you
-        </p>
+      <div className="px-5 py-4 border-b border-gray-100 flex flex-col gap-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>{folderLocationLabel}</h3>
+            <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
+              {approvedDocs.length} approved document{approvedDocs.length !== 1 ? "s" : ""} total
+            </p>
+          </div>
+          {documentFolderId && <button
+    type="button"
+    onClick={() => setDocumentFolderId(parentFolderId)}
+    className="inline-flex items-center gap-1.5 self-start sm:self-auto px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
+    style={{ borderColor: "#D1D5DB", color: BS_GRAY, fontWeight: 600 }}
+  >
+              <ArrowLeft size={12} />
+              Back
+            </button>}
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {documentBreadcrumbs.map((breadcrumb, index) => <div key={breadcrumb.id || "root"} className="flex items-center gap-1.5">
+              {index > 0 && <ChevronRight size={12} style={{ color: "#C4C9CE" }} />}
+              <button
+    type="button"
+    onClick={() => setDocumentFolderId(breadcrumb.id)}
+    className="px-2.5 py-1 rounded-lg text-xs border transition-colors hover:bg-gray-50"
+    style={{
+      borderColor: breadcrumb.id === documentFolderId ? BS_GOLD : "#E5E7EB",
+      color: breadcrumb.id === documentFolderId ? BS_BLACK : BS_GRAY,
+      fontWeight: breadcrumb.id === documentFolderId ? 600 : 500
+    }}
+  >
+                {breadcrumb.name}
+              </button>
+            </div>)}
+        </div>
       </div>
       {documentLoadError && <div className="mx-5 mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
           {documentLoadError}
@@ -708,18 +864,51 @@ function DocumentsSection({
       {approvedDocs.length === 0 ? <div className="p-10 text-center">
           <FileText size={32} className="mx-auto mb-3" style={{ color: "#D1D5DB" }} />
           <p className="text-sm" style={{ color: BS_GRAY }}>No approved documents yet.</p>
-          <p className="text-xs mt-1" style={{ color: "#9CA3AF" }}>Request access from the Requests section.</p>
+          <p className="text-xs mt-1" style={{ color: "#9CA3AF" }}>Request folder access from the Requests section.</p>
         </div> : <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr style={{ backgroundColor: "#FAFAFA" }}>
-                {["Document Name", "Category", "Type", "Date", "Status", "Actions"].map((h) => <th key={h} className="px-4 py-3 text-left text-xs border-b border-gray-100" style={{ color: BS_GRAY, fontWeight: 500 }}>
+                {["Name", "Category", "Type", "Date", "Status", "Actions"].map((h) => <th key={h} className="px-4 py-3 text-left text-xs border-b border-gray-100" style={{ color: BS_GRAY, fontWeight: 500 }}>
                     {h}
                   </th>)}
               </tr>
             </thead>
             <tbody>
-              {approvedDocs.map((doc, i) => <tr key={doc.id} style={{ borderBottom: i < approvedDocs.length - 1 ? "1px solid #F3F4F6" : "none" }}>
+              {visibleApprovedFolders.map((folder) => <tr key={`folder-${folder.id}`} style={{ borderBottom: "1px solid #F3F4F6" }}>
+                  <td className="px-4 py-3.5">
+                    <button
+    type="button"
+    onClick={() => setDocumentFolderId(folder.id)}
+    className="inline-flex items-center gap-3 text-left hover:opacity-80"
+    style={{ color: BS_BLACK, fontWeight: 600 }}
+  >
+                      <Folder size={15} style={{ color: BS_GOLD }} />
+                      {folder.name}
+                    </button>
+                  </td>
+                  <td className="px-4 py-3.5">
+                    <span className="text-xs px-2 py-0.5 rounded" style={{ backgroundColor: "rgba(242,169,0,0.12)", color: "#A37200" }}>
+                      Folder
+                    </span>
+                  </td>
+                  <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>—</td>
+                  <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{folder.createdDate}</td>
+                  <td className="px-4 py-3.5">
+                    <StatusBadge status="approved" />
+                  </td>
+                  <td className="px-4 py-3.5">
+                    <button
+    type="button"
+    onClick={() => setDocumentFolderId(folder.id)}
+    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
+    style={{ borderColor: "#D1D5DB", color: BS_GRAY }}
+  >
+                      Open <ChevronRight size={11} />
+                    </button>
+                  </td>
+                </tr>)}
+              {visibleApprovedDocs.map((doc, i) => <tr key={doc.id} style={{ borderBottom: i < visibleApprovedDocs.length - 1 ? "1px solid #F3F4F6" : "none" }}>
                   <td className="px-4 py-3.5">
                     <div className="flex items-center gap-3">
                       <div className="p-1.5 rounded" style={{ backgroundColor: "#F3F4F6" }}>
@@ -755,9 +944,14 @@ function DocumentsSection({
 		  >
 		                        <Download size={11} /> Download
 		                      </button>
-	                    </div>
-	                  </td>
+		                    </div>
+		                  </td>
                 </tr>)}
+              {visibleApprovedFolders.length === 0 && visibleApprovedDocs.length === 0 && <tr>
+                  <td colSpan={6} className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
+                    No approved documents in this folder.
+                  </td>
+                </tr>}
             </tbody>
           </table>
         </div>}
@@ -768,55 +962,121 @@ function DocumentsSection({
  */
 function RequestsSection({
   myRequests,
-  availableDocs,
+  visibleRequestFolders,
+  requestBreadcrumbs,
+  currentRequestFolder,
+  requestFolderId,
+  setRequestFolderId,
+  folderStatus,
   requestLoadError,
   requestActionError,
   onRequestAccess
 }) {
+  const folderLocationLabel = currentRequestFolder?.path || "All Documents";
+  const parentFolderId = currentRequestFolder?.parentFolderId || "";
+
   return <div className="space-y-6">
       {
     /* Available to request */
   }
       <div className="bg-white rounded-xl border border-gray-100">
-        <div className="px-5 py-4 border-b border-gray-100">
-          <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Available Documents</h3>
-          <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>Request access to these documents</p>
+        <div className="px-5 py-4 border-b border-gray-100 flex flex-col gap-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>{folderLocationLabel}</h3>
+              <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
+                Browse folders and request access by folder scope
+              </p>
+            </div>
+            {requestFolderId && <button
+    type="button"
+    onClick={() => setRequestFolderId(parentFolderId)}
+    className="inline-flex items-center gap-1.5 self-start sm:self-auto px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
+    style={{ borderColor: "#D1D5DB", color: BS_GRAY, fontWeight: 600 }}
+  >
+                <ArrowLeft size={12} />
+                Back
+              </button>}
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {requestBreadcrumbs.map((breadcrumb, index) => <div key={breadcrumb.id || "root"} className="flex items-center gap-1.5">
+                {index > 0 && <ChevronRight size={12} style={{ color: "#C4C9CE" }} />}
+                <button
+    type="button"
+    onClick={() => setRequestFolderId(breadcrumb.id)}
+    className="px-2.5 py-1 rounded-lg text-xs border transition-colors hover:bg-gray-50"
+    style={{
+      borderColor: breadcrumb.id === requestFolderId ? BS_GOLD : "#E5E7EB",
+      color: breadcrumb.id === requestFolderId ? BS_BLACK : BS_GRAY,
+      fontWeight: breadcrumb.id === requestFolderId ? 600 : 500
+    }}
+  >
+                  {breadcrumb.name}
+                </button>
+              </div>)}
+          </div>
         </div>
         {requestActionError && <div className="mx-5 mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
             {requestActionError}
           </div>}
-        {availableDocs.length === 0 ? <div className="p-8 text-center">
-            <CheckCircle size={28} className="mx-auto mb-3" style={{ color: "#22C55E" }} />
-            <p className="text-sm" style={{ color: BS_GRAY }}>You've requested all available documents.</p>
+        {visibleRequestFolders.length === 0 ? <div className="p-8 text-center">
+            <Folder size={28} className="mx-auto mb-3" style={{ color: "#D1D5DB" }} />
+            <p className="text-sm" style={{ color: BS_GRAY }}>No requestable subfolders here.</p>
           </div> : <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr style={{ backgroundColor: "#FAFAFA" }}>
-                  {["Title", "Category", "Type", "Date", "Action"].map((h) => <th key={h} className="px-4 py-3 text-left text-xs border-b border-gray-100" style={{ color: BS_GRAY, fontWeight: 500 }}>
+                  {["Folder", "Documents in Scope", "Status", "Action"].map((h) => <th key={h} className="px-4 py-3 text-left text-xs border-b border-gray-100" style={{ color: BS_GRAY, fontWeight: 500 }}>
                       {h}
                     </th>)}
                 </tr>
               </thead>
               <tbody>
-                {availableDocs.map((doc, i) => <tr key={doc.id} style={{ borderBottom: i < availableDocs.length - 1 ? "1px solid #F3F4F6" : "none" }}>
-                    <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>{doc.title}</td>
+                {visibleRequestFolders.map((folder, i) => {
+                  const status = folderStatus(folder);
+                  const canRequest = !status;
+
+                  return <tr key={folder.id} style={{ borderBottom: i < visibleRequestFolders.length - 1 ? "1px solid #F3F4F6" : "none" }}>
                     <td className="px-4 py-3.5">
-                      <span className="text-xs px-2 py-0.5 rounded" style={{ backgroundColor: "#F3F4F6", color: BS_GRAY }}>
-                        {doc.category}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{doc.type}</td>
-                    <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{doc.uploadedDate}</td>
-	                    <td className="px-4 py-3.5">
-	                      <button
-	    onClick={() => onRequestAccess(doc)}
-	    className="px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80"
-	    style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 500 }}
-	  >
-                        Request Access
+                      <button
+    type="button"
+    onClick={() => setRequestFolderId(folder.id)}
+    className="inline-flex items-center gap-3 text-left hover:opacity-80"
+    style={{ color: BS_BLACK, fontWeight: 600 }}
+  >
+                        <Folder size={15} style={{ color: BS_GOLD }} />
+                        {folder.name}
                       </button>
+                      <p className="text-xs mt-1 ml-7" style={{ color: BS_GRAY }}>{folder.path}</p>
                     </td>
-                  </tr>)}
+                    <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>
+                      {folder.requestableDocumentCount || 0}
+                    </td>
+                    <td className="px-4 py-3.5">
+                      {status ? <StatusBadge status={status} /> : <span className="text-xs" style={{ color: BS_GRAY }}>Available</span>}
+                    </td>
+		                    <td className="px-4 py-3.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+    type="button"
+    onClick={() => setRequestFolderId(folder.id)}
+    className="px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
+    style={{ borderColor: "#D1D5DB", color: BS_GRAY }}
+  >
+                            Open
+                          </button>
+	                      <button
+	    onClick={() => onRequestAccess({ ...folder, resourceType: "folder" })}
+      disabled={!canRequest}
+	    className="px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80 disabled:opacity-50"
+	    style={{ backgroundColor: canRequest ? BS_GOLD : "#E5E7EB", color: canRequest ? BS_BLACK : BS_GRAY, fontWeight: 500 }}
+	  >
+                        {status === "approved" ? "Approved" : status === "pending" ? "Pending" : "Request Folder"}
+	                      </button>
+                        </div>
+                    </td>
+                  </tr>;
+                })}
               </tbody>
             </table>
           </div>}
@@ -840,7 +1100,7 @@ function RequestsSection({
             <table className="w-full text-sm">
               <thead>
                 <tr style={{ backgroundColor: "#FAFAFA" }}>
-                  {["Document", "Category", "Date Requested", "Status", "Decision Message"].map((h) => <th key={h} className="px-4 py-3 text-left text-xs border-b border-gray-100" style={{ color: BS_GRAY, fontWeight: 500 }}>
+                  {["Item", "Type", "Date Requested", "Status", "Decision Message"].map((h) => <th key={h} className="px-4 py-3 text-left text-xs border-b border-gray-100" style={{ color: BS_GRAY, fontWeight: 500 }}>
                       {h}
                     </th>)}
                 </tr>
@@ -850,7 +1110,7 @@ function RequestsSection({
 	                      <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>{req.documentTitle}</td>
 	                      <td className="px-4 py-3.5">
 	                        <span className="text-xs px-2 py-0.5 rounded" style={{ backgroundColor: "#F3F4F6", color: BS_GRAY }}>
-	                          {req.documentCategory || "\u2014"}
+	                          {req.resourceType === "folder" ? "Folder" : req.documentCategory || "\u2014"}
 	                        </span>
 	                      </td>
 	                      <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{req.dateRequested}</td>

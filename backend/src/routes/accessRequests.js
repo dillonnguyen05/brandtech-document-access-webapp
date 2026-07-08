@@ -86,10 +86,12 @@ function timestampToIso(value) {
  */
 function formatRequestSnapshot(requestSnapshot) {
   const data = requestSnapshot.data();
+  const resourceType = data.resourceType || (data.folderId ? "folder" : "document");
 
   return {
     id: requestSnapshot.id,
     ...data,
+    resourceType,
     createdAt: timestampToIso(data.createdAt),
     reviewedAt: timestampToIso(data.reviewedAt)
   };
@@ -123,6 +125,34 @@ function documentTargetsCustomer(document, customerId, company) {
   }
 
   return false;
+}
+
+/**
+ * Checks if a document lives directly inside a folder or one of its subfolders.
+ */
+function folderContainsDocument(folder, document) {
+  const folderPath = folder.path || "";
+  const documentFolderPath = document.folderPath || "";
+
+  if (!folderPath) return true;
+
+  return documentFolderPath === folderPath
+    || documentFolderPath.startsWith(`${folderPath}/`);
+}
+
+/**
+ * Counts active documents in a folder subtree that are assigned to the customer.
+ */
+async function countTargetableFolderDocuments(folder, customerId, company) {
+  const snapshot = await adminDb.collection("documents").get();
+
+  return snapshot.docs.filter((documentSnapshot) => {
+    const document = documentSnapshot.data();
+
+    return document.active !== false
+      && folderContainsDocument(folder, document)
+      && documentTargetsCustomer(document, customerId, company);
+  }).length;
 }
 
 /**
@@ -161,7 +191,10 @@ async function updateAccessDecision(req, action) {
       );
     }
 
-    const documentTitle = accessRequest.documentTitle || "the document";
+    const resourceType = accessRequest.resourceType || (accessRequest.folderId ? "folder" : "document");
+    const documentTitle = accessRequest.documentTitle
+      || accessRequest.folderName
+      || (resourceType === "folder" ? "the folder" : "the document");
 
     transaction.update(requestRef, {
       status: config.nextStatus,
@@ -178,7 +211,10 @@ async function updateAccessDecision(req, action) {
       recipientEmail: accessRequest.customerEmail || "",
       type: config.notificationType,
       message: config.message(documentTitle, decisionMessage),
+      resourceType,
       documentId: accessRequest.documentId || "",
+      folderId: accessRequest.folderId || "",
+      folderPath: accessRequest.folderPath || "",
       documentTitle,
       requestId,
       read: false,
@@ -190,6 +226,8 @@ async function updateAccessDecision(req, action) {
       customer: accessRequest.customerName || "",
       company: accessRequest.company || "",
       documentId: accessRequest.documentId || "",
+      folderId: accessRequest.folderId || "",
+      resourceType,
       document: documentTitle,
       action: config.auditAction,
       reason: decisionMessage,
@@ -274,21 +312,106 @@ customerAccessRequestsRouter.get("/", async (req, res) => {
   res.status(200).json({ requests });
 });
 
-// Lets active customers request access to documents assigned to them or their company.
+// Lets active customers request access to documents or folders assigned to them or their company.
 customerAccessRequestsRouter.post("/", async (req, res) => {
+  const resourceType = req.body.resourceType === "folder" ? "folder" : "document";
   const documentId = typeof req.body.documentId === "string"
     ? req.body.documentId.trim()
     : "";
+  const folderId = typeof req.body.folderId === "string"
+    ? req.body.folderId.trim()
+    : "";
 
-  if (!documentId) {
+  if (resourceType === "document" && !documentId) {
     throw createRouteError(400, "Select a document before requesting access.");
+  }
+
+  if (resourceType === "folder" && !folderId) {
+    throw createRouteError(400, "Select a folder before requesting access.");
   }
 
   const customerId = req.auth.uid;
   const customer = req.userProfile;
-  const requestId = `${customerId}_${documentId}`;
-  const documentRef = adminDb.collection("documents").doc(documentId);
+  const company = customer.company || "";
+  const requestId = resourceType === "folder"
+    ? `${customerId}_folder_${folderId}`
+    : `${customerId}_${documentId}`;
+  const documentRef = resourceType === "document"
+    ? adminDb.collection("documents").doc(documentId)
+    : null;
+  const folderRef = resourceType === "folder"
+    ? adminDb.collection("documentFolders").doc(folderId)
+    : null;
   const requestRef = adminDb.collection("accessRequests").doc(requestId);
+
+  if (resourceType === "folder") {
+    const folderSnapshot = await folderRef.get();
+
+    if (!folderSnapshot.exists) {
+      throw createRouteError(404, "Folder not found.");
+    }
+
+    const folder = {
+      id: folderSnapshot.id,
+      ...folderSnapshot.data()
+    };
+    const documentCount = await countTargetableFolderDocuments(
+      folder,
+      customerId,
+      company
+    );
+
+    if (documentCount === 0) {
+      throw createRouteError(
+        403,
+        "This folder does not contain documents assigned to your account."
+      );
+    }
+
+    await adminDb.runTransaction(async (transaction) => {
+      const requestSnapshot = await transaction.get(requestRef);
+
+      if (requestSnapshot.exists) {
+        const currentStatus = requestSnapshot.data().status;
+
+        if (currentStatus === "pending" || currentStatus === "approved") {
+          throw createRouteError(
+            409,
+            `This folder request is already ${currentStatus}.`
+          );
+        }
+      }
+
+      transaction.set(requestRef, {
+        customerId,
+        customerName: customer.name || "",
+        customerEmail: req.auth.email || customer.email || "",
+        company,
+        resourceType: "folder",
+        documentId: "",
+        documentTitle: folder.path || folder.name || "Folder",
+        documentCategory: "Folder",
+        folderId,
+        folderName: folder.name || "Folder",
+        folderPath: folder.path || "",
+        folderDocumentCount: documentCount,
+        status: "pending",
+        createdAt: FieldValue.serverTimestamp(),
+        reviewedAt: null,
+        reviewedBy: null,
+        reviewedByName: null,
+        lastAction: "requested",
+        decisionMessage: ""
+      });
+    });
+
+    res.status(201).json({
+      message: "Folder access request submitted.",
+      requestId,
+      status: "pending"
+    });
+    return;
+  }
 
   await adminDb.runTransaction(async (transaction) => {
     const [documentSnapshot, requestSnapshot] = await Promise.all([
@@ -326,9 +449,13 @@ customerAccessRequestsRouter.post("/", async (req, res) => {
       customerName: customer.name || "",
       customerEmail: req.auth.email || customer.email || "",
       company: customer.company || "",
+      resourceType: "document",
       documentId,
       documentTitle: document.title || document.fileName || "Untitled Document",
       documentCategory: document.category || "Uncategorized",
+      folderId: "",
+      folderName: "",
+      folderPath: "",
       status: "pending",
       createdAt: FieldValue.serverTimestamp(),
       reviewedAt: null,

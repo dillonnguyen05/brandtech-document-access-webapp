@@ -139,8 +139,7 @@ function timestampToIso(value) {
 /**
  * Removes private Storage fields before sending document metadata to the frontend.
  */
-function formatDocumentSnapshot(documentSnapshot) {
-  const data = documentSnapshot.data();
+function formatDocumentData(id, data) {
   const {
     downloadURL,
     storagePath,
@@ -148,11 +147,18 @@ function formatDocumentSnapshot(documentSnapshot) {
   } = data;
 
   return {
-    id: documentSnapshot.id,
+    id,
     ...publicData,
     createdAt: timestampToIso(data.createdAt),
     updatedAt: timestampToIso(data.updatedAt)
   };
+}
+
+/**
+ * Removes private Storage fields before sending document metadata to the frontend.
+ */
+function formatDocumentSnapshot(documentSnapshot) {
+  return formatDocumentData(documentSnapshot.id, documentSnapshot.data());
 }
 
 /**
@@ -327,6 +333,56 @@ function documentTargetsCustomer(document, customerId, company) {
   }
 
   return false;
+}
+
+/**
+ * Checks if a folder access request covers a document in that folder subtree.
+ */
+function folderRequestCoversDocument(accessRequest, document) {
+  if ((accessRequest.resourceType || "") !== "folder") return false;
+
+  const requestFolderPath = accessRequest.folderPath || "";
+  const documentFolderPath = document.folderPath || "";
+
+  if (!requestFolderPath) return true;
+
+  return documentFolderPath === requestFolderPath
+    || documentFolderPath.startsWith(`${requestFolderPath}/`);
+}
+
+/**
+ * Checks if a document belongs inside a folder or one of its subfolders.
+ */
+function folderContainsDocument(folder, document) {
+  const folderPath = folder.path || "";
+  const documentFolderPath = document.folderPath || "";
+
+  if (!folderPath) return true;
+
+  return documentFolderPath === folderPath
+    || documentFolderPath.startsWith(`${folderPath}/`);
+}
+
+/**
+ * Adds request/approval counts to folder metadata for the customer folder browser.
+ */
+function formatCustomerFolder(folderSnapshot, targetDocuments, approvedDocuments) {
+  const folder = {
+    id: folderSnapshot.id,
+    ...folderSnapshot.data()
+  };
+  const requestableDocumentCount = targetDocuments.filter(({ data }) => (
+    folderContainsDocument(folder, data)
+  )).length;
+  const approvedDocumentCount = approvedDocuments.filter(({ data }) => (
+    folderContainsDocument(folder, data)
+  )).length;
+
+  return {
+    ...formatFolderSnapshot(folderSnapshot),
+    requestableDocumentCount,
+    approvedDocumentCount
+  };
 }
 
 /**
@@ -858,34 +914,86 @@ router.delete("/:documentId", async (req, res) => {
   });
 });
 
-// Lists documents the current user can see; admins see all documents.
+// Lists documents/folders the current user can see; admins see all documents.
 documentAccessRouter.get("/", async (req, res) => {
   if (req.userProfile.role === "admin") {
-    const snapshot = await adminDb
-      .collection("documents")
-      .orderBy("createdAt", "desc")
-      .get();
+    const [documentSnapshot, folderSnapshot] = await Promise.all([
+      adminDb
+        .collection("documents")
+        .orderBy("createdAt", "desc")
+        .get(),
+      adminDb
+        .collection("documentFolders")
+        .orderBy("path", "asc")
+        .get()
+    ]);
 
     res.status(200).json({
-      documents: snapshot.docs.map(formatDocumentSnapshot)
+      documents: documentSnapshot.docs.map(formatDocumentSnapshot),
+      folders: folderSnapshot.docs.map(formatFolderSnapshot)
     });
     return;
   }
 
-  const snapshot = await adminDb
-    .collection("documents")
-    .orderBy("createdAt", "desc")
-    .get();
+  const [documentSnapshot, folderSnapshot, requestSnapshot] = await Promise.all([
+    adminDb
+      .collection("documents")
+      .orderBy("createdAt", "desc")
+      .get(),
+    adminDb
+      .collection("documentFolders")
+      .orderBy("path", "asc")
+      .get(),
+    adminDb
+      .collection("accessRequests")
+      .where("customerId", "==", req.auth.uid)
+      .get()
+  ]);
   const company = req.userProfile.company || "";
-  const documents = snapshot.docs
-    .filter((documentSnapshot) => {
-      const document = documentSnapshot.data();
-      return document.active !== false
-        && documentTargetsCustomer(document, req.auth.uid, company);
-    })
-    .map(formatDocumentSnapshot);
+  const approvedRequests = requestSnapshot.docs
+    .map((snapshot) => snapshot.data())
+    .filter((request) => request.status === "approved");
+  const approvedDocumentIds = new Set(
+    approvedRequests
+      .filter((request) => (request.resourceType || "document") === "document")
+      .map((request) => request.documentId)
+      .filter(Boolean)
+  );
+  const approvedFolderRequests = approvedRequests.filter((request) => (
+    request.resourceType === "folder"
+  ));
+  const targetDocuments = documentSnapshot.docs
+    .map((snapshot) => ({
+      id: snapshot.id,
+      data: snapshot.data()
+    }))
+    .filter(({ data }) => (
+      data.active !== false
+      && documentTargetsCustomer(data, req.auth.uid, company)
+    ));
+  const approvedDocuments = targetDocuments.filter(({ id, data }) => (
+    approvedDocumentIds.has(id)
+    || approvedFolderRequests.some((request) => folderRequestCoversDocument(request, data))
+  ));
+  const folders = folderSnapshot.docs
+    .map((snapshot) => ({
+      snapshot,
+      data: {
+        id: snapshot.id,
+        ...snapshot.data()
+      }
+    }))
+    .filter(({ data }) => (
+      targetDocuments.some((document) => folderContainsDocument(data, document.data))
+    ))
+    .map(({ snapshot }) => (
+      formatCustomerFolder(snapshot, targetDocuments, approvedDocuments)
+    ));
 
-  res.status(200).json({ documents });
+  res.status(200).json({
+    documents: approvedDocuments.map(({ id, data }) => formatDocumentData(id, data)),
+    folders
+  });
 });
 
 // Returns a short-lived signed URL for preview/download and logs customer downloads.
@@ -894,7 +1002,7 @@ documentAccessRouter.get("/:documentId/download", async (req, res) => {
     .collection("documents")
     .doc(req.params.documentId);
   const documentSnapshot = await documentRef.get();
-  let approvedRequestSnapshot = null;
+  let approvedAccessRequest = null;
 
   if (!documentSnapshot.exists) {
     throw createRouteError(404, "Document not found.");
@@ -915,12 +1023,38 @@ documentAccessRouter.get("/:documentId/download", async (req, res) => {
       throw createRouteError(403, "This document is not assigned to your account.");
     }
 
-    approvedRequestSnapshot = await adminDb
+    const directRequestSnapshot = await adminDb
       .collection("accessRequests")
       .doc(`${req.auth.uid}_${documentRef.id}`)
       .get();
 
-    if (!approvedRequestSnapshot.exists || approvedRequestSnapshot.data().status !== "approved") {
+    if (directRequestSnapshot.exists && directRequestSnapshot.data().status === "approved") {
+      approvedAccessRequest = {
+        id: directRequestSnapshot.id,
+        data: directRequestSnapshot.data()
+      };
+    }
+
+    if (!approvedAccessRequest) {
+      const folderRequestSnapshot = await adminDb
+        .collection("accessRequests")
+        .where("customerId", "==", req.auth.uid)
+        .get();
+      const approvedFolderRequest = folderRequestSnapshot.docs.find((requestSnapshot) => (
+        requestSnapshot.data().status === "approved"
+        && requestSnapshot.data().resourceType === "folder"
+        && folderRequestCoversDocument(requestSnapshot.data(), document)
+      ));
+
+      if (approvedFolderRequest) {
+        approvedAccessRequest = {
+          id: approvedFolderRequest.id,
+          data: approvedFolderRequest.data()
+        };
+      }
+    }
+
+    if (!approvedAccessRequest) {
       throw createRouteError(
         403,
         "Approved access is required to open this document."
@@ -954,7 +1088,7 @@ documentAccessRouter.get("/:documentId/download", async (req, res) => {
   });
 
   if (req.userProfile.role === "customer" && disposition === "attachment") {
-    const approvedRequest = approvedRequestSnapshot?.data() || {};
+    const approvedRequest = approvedAccessRequest?.data || {};
     const auditRef = adminDb.collection("auditLog").doc();
 
     await auditRef.set({
@@ -967,7 +1101,7 @@ documentAccessRouter.get("/:documentId/download", async (req, res) => {
       adminId: "",
       admin: "",
       adminEmail: "",
-      requestId: approvedRequestSnapshot?.id || `${req.auth.uid}_${documentRef.id}`,
+      requestId: approvedAccessRequest?.id || `${req.auth.uid}_${documentRef.id}`,
       fileName,
       fileType: document.fileType || "",
       downloadUrlExpiresAt: new Date(Date.now() + SIGNED_URL_LIFETIME_MS),
