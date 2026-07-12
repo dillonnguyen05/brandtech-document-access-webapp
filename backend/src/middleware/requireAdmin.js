@@ -2,7 +2,7 @@ import { adminDb } from "../firebaseAdmin.js";
 
 /**
  * Allows the request to continue only when the signed-in user has an active
- * Firestore profile with role "admin".
+ * Firestore profile with an admin-facing role.
  */
 async function requireAdmin(req, res, next) {
   const uid = req.auth?.uid;
@@ -23,12 +23,12 @@ async function requireAdmin(req, res, next) {
     }
 
     const profile = profileSnapshot.data();
-    const isActiveAdmin = profile.role === "admin"
+    const isActiveAdmin = ["admin", "owner"].includes(profile.role)
       && profile.status === "active";
 
     if (!isActiveAdmin) {
       return res.status(403).json({
-        error: "Active administrator access required."
+        error: "Active administrator or owner access required."
       });
     }
 

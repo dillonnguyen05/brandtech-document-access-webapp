@@ -133,3 +133,21 @@ export function grantAccessRequest(requestId) {
 export function revokeAccessRequest(requestId, message) {
   return updateAccessRequest(requestId, "revoke", message);
 }
+
+/**
+ * Updates which nested documents are excluded from an approved folder request.
+ */
+export async function updateFolderAccessExclusions(requestId, excludedDocumentIds) {
+  // Function from apiClient.js: checks Firebase sign-in and updates folder access exclusions through Express.
+  const result = await apiRequest(
+    `/api/admin/access-requests/${encodeURIComponent(requestId)}/exclusions`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        excludedDocumentIds
+      })
+    }
+  );
+
+  return mapApiRequests([result.request])[0];
+}

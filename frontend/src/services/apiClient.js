@@ -55,7 +55,7 @@ export async function apiRequest(path, options = {}) {
 
   if (!response.ok) {
     const error = new Error(
-      data?.error || `API request failed with status ${response.status}.`
+      data?.error || `API request failed wicoth status ${response.status}.`
     );
 
     error.status = response.status;

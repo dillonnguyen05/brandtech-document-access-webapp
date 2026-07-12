@@ -16,6 +16,7 @@ import {
   XCircle,
   RotateCcw,
   Users,
+  ShieldCheck,
   Files,
   Clock,
   Camera,
@@ -41,6 +42,7 @@ import {
   downloadDocument,
   loadAdminDocuments,
   loadDocumentFolders,
+  updateDocumentFolder,
   updateDocument,
   uploadDocument,
   uploadFolder
@@ -51,17 +53,20 @@ import { loadAuditLog } from "../services/auditService.js";
 import {
   approveAccessRequest,
   denyAccessRequest,
-  grantAccessRequest,
   loadAccessRequests,
-  revokeAccessRequest
+  revokeAccessRequest,
+  updateFolderAccessExclusions
 } from "../services/requestService.js";
 // Functions from userService.js; check customer approval/revocation actions and active customer reads through Express.
 import {
   approveCustomer,
   denyCustomer,
+  loadAllUsers,
   loadActiveCustomers,
   loadPendingCustomers,
-  revokeCustomer
+  makeUserAdmin,
+  revokeCustomer,
+  revokeUserAdmin
 } from "../services/userService.js";
 const BS_BLACK = "#101820";
 const BS_GOLD = "#F2A900";
@@ -76,6 +81,7 @@ function StatusBadge({ status }) {
   const map = {
     pending: { bg: "rgba(242,169,0,0.12)", color: "#A37200", label: "Pending" },
     approved: { bg: "rgba(34,197,94,0.12)", color: "#166534", label: "Approved" },
+    active: { bg: "rgba(34,197,94,0.12)", color: "#166534", label: "Active" },
     denied: { bg: "rgba(138,42,43,0.12)", color: BS_MAROON, label: "Denied" },
     revoked: { bg: "rgba(138,42,43,0.12)", color: BS_MAROON, label: "Revoked" },
     "Access Granted": { bg: "rgba(34,197,94,0.12)", color: "#166534", label: "Access Granted" },
@@ -91,11 +97,33 @@ function StatusBadge({ status }) {
       {cfg.label}
     </span>;
 }
+
+/**
+ * Renders role pills for the owner-only all-users table.
+ */
+function RoleBadge({ role }) {
+  const map = {
+    owner: { bg: "rgba(242,169,0,0.16)", color: BS_BLACK, label: "Owner" },
+    admin: { bg: "rgba(14,165,233,0.12)", color: "#0369A1", label: "Admin" },
+    customer: { bg: "#F3F4F6", color: BS_GRAY, label: "Customer" }
+  };
+  const cfg = map[role] || { bg: "#F3F4F6", color: BS_GRAY, label: role || "Unknown" };
+
+  return <span
+    className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs"
+    style={{ backgroundColor: cfg.bg, color: cfg.color, fontWeight: 600 }}
+  >
+    {cfg.label}
+  </span>;
+}
+
 const NAV = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { key: "documents", label: "Documents", icon: FileText },
   { key: "requests", label: "Access Requests", icon: ClipboardList },
+  { key: "access-management", label: "Access Management", icon: CheckCircle },
   { key: "users", label: "User Approvals", icon: Users },
+  { key: "owner-users", label: "All Users", icon: ShieldCheck, ownerOnly: true },
   { key: "audit", label: "Audit Log", icon: History },
   { key: "settings", label: "Settings", icon: Settings },
   { key: "profile", label: "Profile", icon: UserCircle }
@@ -209,6 +237,44 @@ function buildFolderOptions(folders) {
 }
 
 /**
+ * Checks whether an admin document sits inside a folder access request's subtree.
+ */
+function accessRequestContainsDocument(request, document) {
+  if ((request.resourceType || "") !== "folder") return false;
+
+  const requestFolderPath = request.folderPath || "";
+  const documentFolderPath = document.folderPath || "";
+
+  if (!requestFolderPath) return true;
+
+  return documentFolderPath === requestFolderPath
+    || documentFolderPath.startsWith(`${requestFolderPath}/`);
+}
+
+/**
+ * Checks whether a document's target audience matches the folder-access customer.
+ */
+function documentTargetsAccessRequest(request, document) {
+  if (document.active === false || document.shareEnabled === false) {
+    return false;
+  }
+
+  if (!document.targetType || document.targetType === "all") {
+    return true;
+  }
+
+  if (document.targetType === "company") {
+    return Boolean(request.company) && document.targetCompany === request.company;
+  }
+
+  if (document.targetType === "customer") {
+    return document.targetCustomerId === request.customerId;
+  }
+
+  return false;
+}
+
+/**
  * Infers the visible file type label from an uploaded file name.
  */
 function inferDocumentTypeFromFileName(fileName = "") {
@@ -219,6 +285,163 @@ function inferDocumentTypeFromFileName(fileName = "") {
   if (lowerName.endsWith(".xls") || lowerName.endsWith(".xlsx")) return "Excel";
   if (lowerName.endsWith(".ppt") || lowerName.endsWith(".pptx")) return "PowerPoint";
   return "Other";
+}
+
+/**
+ * Reads the browser-provided folder path for a selected upload file.
+ */
+function uploadRelativePath(file) {
+  return (file?.webkitRelativePath || file?.name || "")
+    .replace(/\\/g, "/")
+    .replace(/^\/+/, "")
+    .replace(/\/+/g, "/")
+    .trim();
+}
+
+/**
+ * Formats selected folder-upload file sizes for the sharing review UI.
+ */
+function formatShareFileSize(bytes) {
+  if (!bytes) return "0 KB";
+
+  if (bytes < 1024 * 1024) {
+    return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  }
+
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * Creates a folder tree node used by the folder upload sharing selector.
+ */
+function createUploadFolderNode(name, folderPath) {
+  return {
+    id: `folder:${folderPath}`,
+    type: "folder",
+    name,
+    path: folderPath,
+    folders: [],
+    files: [],
+    _folderMap: new Map()
+  };
+}
+
+/**
+ * Sorts and removes temporary maps from upload sharing tree nodes.
+ */
+function finalizeUploadFolderNode(node) {
+  const finalizedFolders = node.folders
+    .map(finalizeUploadFolderNode)
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const finalizedFiles = [...node.files].sort((a, b) => (
+    a.name.localeCompare(b.name)
+  ));
+
+  return {
+    id: node.id,
+    type: node.type,
+    name: node.name,
+    path: node.path,
+    folders: finalizedFolders,
+    files: finalizedFiles
+  };
+}
+
+/**
+ * Builds a selectable folder/file tree from the browser FileList.
+ */
+function buildUploadShareTree(files) {
+  const rootFolders = [];
+  const rootFolderMap = new Map();
+
+  Array.from(files || []).forEach((file) => {
+    const relativePath = uploadRelativePath(file);
+
+    if (!relativePath) return;
+
+    const pathParts = relativePath.split("/").filter(Boolean);
+    const fileName = pathParts.pop() || file.name || "Untitled file";
+    const folderParts = pathParts.length > 0 ? pathParts : ["Selected Files"];
+    let currentFolders = rootFolders;
+    let currentFolderMap = rootFolderMap;
+    let currentFolder = null;
+    let folderPath = "";
+
+    folderParts.forEach((folderName) => {
+      folderPath = folderPath ? `${folderPath}/${folderName}` : folderName;
+
+      if (!currentFolderMap.has(folderPath)) {
+        const folder = createUploadFolderNode(folderName, folderPath);
+        currentFolderMap.set(folderPath, folder);
+        currentFolders.push(folder);
+      }
+
+      currentFolder = currentFolderMap.get(folderPath);
+      currentFolders = currentFolder.folders;
+      currentFolderMap = currentFolder._folderMap;
+    });
+
+    if (!currentFolder) return;
+
+    if (!currentFolder.files.some((item) => item.path === relativePath)) {
+      currentFolder.files.push({
+        id: `file:${relativePath}`,
+        type: "file",
+        name: fileName,
+        path: relativePath,
+        sizeLabel: formatShareFileSize(file.size),
+        typeLabel: inferDocumentTypeFromFileName(fileName)
+      });
+    }
+  });
+
+  return rootFolders
+    .map(finalizeUploadFolderNode)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Collects every file node below a folder tree node.
+ */
+function collectUploadFileNodes(node) {
+  return [
+    ...node.files,
+    ...node.folders.flatMap(collectUploadFileNodes)
+  ];
+}
+
+/**
+ * Flattens all file nodes in the upload sharing tree.
+ */
+function flattenUploadTreeFiles(tree) {
+  return tree.flatMap(collectUploadFileNodes);
+}
+
+/**
+ * Collects folder paths so newly selected uploads start expanded.
+ */
+function collectUploadFolderPaths(tree) {
+  return tree.flatMap((node) => [
+    node.path,
+    ...collectUploadFolderPaths(node.folders)
+  ]);
+}
+
+/**
+ * Counts how much of a folder tree node is selected for sharing.
+ */
+function uploadFolderSelectionStats(node, selectedPaths) {
+  const filePaths = collectUploadFileNodes(node).map((file) => file.path);
+  const selectedCount = filePaths.filter((filePath) => selectedPaths.has(filePath)).length;
+  const totalCount = filePaths.length;
+
+  return {
+    selectedCount,
+    totalCount,
+    checked: totalCount > 0 && selectedCount === totalCount,
+    indeterminate: selectedCount > 0 && selectedCount < totalCount
+  };
 }
 
 /**
@@ -260,8 +483,13 @@ function AdminDashboard() {
   const [uploadTargetCustomerId, setUploadTargetCustomerId] = useState("");
   const [uploadFile, setUploadFile] = useState(null);
   const [folderName, setFolderName] = useState("");
+  const [folderTargetType, setFolderTargetType] = useState("all");
+  const [folderTargetCompany, setFolderTargetCompany] = useState("");
+  const [folderTargetCustomerId, setFolderTargetCustomerId] = useState("");
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [folderUploadFiles, setFolderUploadFiles] = useState([]);
+  const [folderSharePaths, setFolderSharePaths] = useState(new Set());
+  const [expandedFolderSharePaths, setExpandedFolderSharePaths] = useState(new Set());
   const [folderUploading, setFolderUploading] = useState(false);
   const [folderUploadProgress, setFolderUploadProgress] = useState(0);
   const [folderUploadDone, setFolderUploadDone] = useState(false);
@@ -277,8 +505,13 @@ function AdminDashboard() {
   const [auditLoadError, setAuditLoadError] = useState("");
   const [activeCustomers, setActiveCustomers] = useState([]);
   const [activeCustomerError, setActiveCustomerError] = useState("");
+  const [allUsers, setAllUsers] = useState([]);
+  const [ownerUserError, setOwnerUserError] = useState("");
+  const [updatingRoleUserId, setUpdatingRoleUserId] = useState("");
+  const [updatingRoleAction, setUpdatingRoleAction] = useState("");
   const [previewDocument, setPreviewDocument] = useState(null);
   const [editingDocument, setEditingDocument] = useState(null);
+  const [editingFolder, setEditingFolder] = useState(null);
   const [accessDecision, setAccessDecision] = useState(null);
   const fileRef = useRef(null);
   const folderFileRef = useRef(null);
@@ -286,11 +519,13 @@ function AdminDashboard() {
     new Set(activeCustomers.map((customer) => customer.company).filter(Boolean))
   ).sort((a, b) => a.localeCompare(b));
   const selectedTargetCustomer = activeCustomers.find((customer) => customer.id === uploadTargetCustomerId);
+  const selectedFolderTargetCustomer = activeCustomers.find((customer) => customer.id === folderTargetCustomerId);
   const currentFolder = folders.find((folder) => folder.id === currentFolderId);
   const folderOptions = buildFolderOptions(folders);
   const folderBreadcrumbs = buildFolderBreadcrumbs(folders, currentFolderId);
   const visibleFolders = folders.filter((folder) => folder.parentFolderId === currentFolderId);
   const visibleDocuments = documents.filter((document) => (document.folderId || "") === currentFolderId);
+  const isOwner = user?.role === "owner";
 
   /**
    * Reloads admin document metadata after upload, edit, or delete actions.
@@ -368,6 +603,26 @@ function AdminDashboard() {
   }, []);
 
   /**
+   * Reloads the owner-only table that lists every account and role.
+   */
+  const refreshAllUsers = useCallback(async () => {
+    if (!isOwner) {
+      setAllUsers([]);
+      return;
+    }
+
+    try {
+      // Function from userService.js: loads all users from the owner-only Express route.
+      const users = await loadAllUsers();
+      setAllUsers(users);
+      setOwnerUserError("");
+    } catch (error) {
+      console.error(error);
+      setOwnerUserError(error.message || "Unable to load all users.");
+    }
+  }, [isOwner]);
+
+  /**
    * Reloads document access requests from Express.
    */
   const refreshAccessRequests = useCallback(async () => {
@@ -389,8 +644,10 @@ function AdminDashboard() {
     logout();
     navigate("/login");
   };
-  const pendingCount = requests.filter((r) => r.status === "pending").length;
-  const approvedCount = requests.filter((r) => r.status === "approved").length;
+  const pendingRequests = requests.filter((request) => request.status === "pending");
+  const activeAccessRequests = requests.filter((request) => request.status === "approved");
+  const pendingCount = pendingRequests.length;
+  const approvedCount = activeAccessRequests.length;
   const uniqueCustomers = new Set(requests.map((r) => r.customerId)).size;
   useEffect(() => {
     let active = true;
@@ -538,6 +795,44 @@ function AdminDashboard() {
       window.clearInterval(intervalId);
     };
   }, []);
+  useEffect(() => {
+    if (!isOwner) {
+      if (section === "owner-users") {
+        setSection("dashboard");
+      }
+      setAllUsers([]);
+      return undefined;
+    }
+
+    let active = true;
+
+    /**
+     * Polls all users through Express for owner role-management changes.
+     */
+    const loadLatestAllUsers = () => {
+      // Function from userService.js: loads all user roles from the owner-only Express route.
+      loadAllUsers()
+        .then((users) => {
+          if (!active) return;
+          setAllUsers(users);
+          setOwnerUserError("");
+        })
+        .catch((error) => {
+          console.error(error);
+          if (active) {
+            setOwnerUserError(error.message || "Unable to load all users.");
+          }
+        });
+    };
+
+    loadLatestAllUsers();
+    const intervalId = window.setInterval(loadLatestAllUsers, 15e3);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [isOwner, section]);
 
   /**
    * Approves a pending document request and refreshes audit history.
@@ -570,26 +865,6 @@ function AdminDashboard() {
   };
 
   /**
-   * Grants access again from an audit-log row after a denial or revocation.
-   */
-  const grantAccess = async (requestId) => {
-    const auditEntry = auditLog.find((a) => a.requestId === requestId && (a.action === "Access Denied" || a.action === "Access Revoked"));
-    if (!auditEntry) return;
-    try {
-      setRequestLoadError("");
-      // Function from requestService.js: asks Express to grant document access again.
-      await grantAccessRequest(requestId);
-      await Promise.all([
-        refreshAccessRequests(),
-        refreshAuditLog()
-      ]);
-    } catch (error) {
-      console.error(error);
-      setRequestLoadError(error.message || "Unable to grant document access.");
-    }
-  };
-
-  /**
    * Opens the revocation message modal for an approved document request.
    */
   const revokeAccess = (requestId) => {
@@ -600,6 +875,25 @@ function AdminDashboard() {
       request,
       type: "revoke"
     });
+  };
+
+  /**
+   * Saves nested document exclusions for an approved folder access request.
+   */
+  const saveFolderAccessExclusions = async (requestId, excludedDocumentIds) => {
+    try {
+      setRequestLoadError("");
+      // Function from requestService.js: asks Express to unshare selected nested documents from a folder request.
+      await updateFolderAccessExclusions(requestId, excludedDocumentIds);
+      await Promise.all([
+        refreshAccessRequests(),
+        refreshAuditLog()
+      ]);
+    } catch (error) {
+      console.error(error);
+      setRequestLoadError(error.message || "Unable to update folder access.");
+      throw error;
+    }
   };
 
   /**
@@ -711,12 +1005,32 @@ function AdminDashboard() {
       return;
     }
 
+    if (folderTargetType === "company" && !folderTargetCompany) {
+      setFolderActionError("Select a target company for this folder.");
+      return;
+    }
+
+    if (folderTargetType === "customer" && !folderTargetCustomerId) {
+      setFolderActionError("Select a target customer for this folder.");
+      return;
+    }
+
     setCreatingFolder(true);
     setFolderActionError("");
 
     try {
       // Function from documentService.js: creates a folder through Express.
-      await createDocumentFolder(folderName, currentFolderId);
+      await createDocumentFolder(
+        folderName,
+        currentFolderId,
+        {
+          targetType: folderTargetType,
+          targetCompany: folderTargetType === "company" ? folderTargetCompany : "",
+          targetCustomerId: folderTargetType === "customer" ? folderTargetCustomerId : "",
+          targetCustomerName: folderTargetType === "customer" ? selectedFolderTargetCustomer?.name || "" : "",
+          targetCustomerEmail: folderTargetType === "customer" ? selectedFolderTargetCustomer?.email || "" : ""
+        }
+      );
       setFolderName("");
       await Promise.all([
         refreshFolders(),
@@ -731,6 +1045,22 @@ function AdminDashboard() {
   };
 
   /**
+   * Stores selected folder-upload files and preselects every file for sharing.
+   */
+  const handleFolderUploadFilesChange = (files) => {
+    const nextFiles = Array.from(files || []);
+    const shareTree = buildUploadShareTree(nextFiles);
+    const uploadFiles = flattenUploadTreeFiles(shareTree);
+
+    setFolderUploadFiles(nextFiles);
+    setFolderSharePaths(new Set(uploadFiles.map((file) => file.path)));
+    setExpandedFolderSharePaths(new Set(collectUploadFolderPaths(shareTree)));
+    setFolderUploadDone(false);
+    setFolderUploadSummary(null);
+    setFolderActionError("");
+  };
+
+  /**
    * Uploads all supported files from a selected browser folder.
    */
   const handleFolderUpload = async (event) => {
@@ -738,6 +1068,11 @@ function AdminDashboard() {
 
     if (folderUploadFiles.length === 0) {
       setFolderActionError("Please select a folder.");
+      return;
+    }
+
+    if (folderSharePaths.size === 0) {
+      setFolderActionError("Select at least one folder or file to share.");
       return;
     }
 
@@ -766,7 +1101,8 @@ function AdminDashboard() {
           targetType: uploadTargetType,
           targetCompany: uploadTargetType === "company" ? uploadTargetCompany : "",
           targetCustomerId: uploadTargetType === "customer" ? uploadTargetCustomerId : "",
-          parentFolderId: currentFolderId
+          parentFolderId: currentFolderId,
+          sharedFilePaths: Array.from(folderSharePaths)
         },
         setFolderUploadProgress
       );
@@ -774,9 +1110,12 @@ function AdminDashboard() {
       setFolderUploadDone(true);
       setFolderUploadSummary({
         uploadedCount: folderUploadResult.documents.length,
+        sharedCount: folderUploadResult.sharedCount,
         skippedFiles: folderUploadResult.skippedFiles || []
       });
       setFolderUploadFiles([]);
+      setFolderSharePaths(new Set());
+      setExpandedFolderSharePaths(new Set());
       if (folderFileRef.current) folderFileRef.current.value = "";
       await Promise.all([
         refreshDocuments(),
@@ -832,6 +1171,28 @@ function AdminDashboard() {
   };
 
   /**
+   * Saves folder metadata changes and refreshes folder/document tables.
+   */
+  const handleUpdateFolder = async (folderId, folderData) => {
+    setFolderActionError("");
+
+    try {
+      // Function from documentService.js: updates folder metadata and nested document rules through Express.
+      await updateDocumentFolder(folderId, folderData);
+      setEditingFolder(null);
+      await Promise.all([
+        refreshFolders(),
+        refreshDocuments(),
+        refreshAuditLog()
+      ]);
+    } catch (error) {
+      console.error(error);
+      setFolderActionError(error.message || "Unable to update folder.");
+      throw error;
+    }
+  };
+
+  /**
    * Deletes a document plus related requests/notifications through Express.
    */
   const handleDeleteDocument = async (document) => {
@@ -875,6 +1236,7 @@ function AdminDashboard() {
       await Promise.all([
         refreshPendingUsers(),
         refreshActiveCustomers(),
+        refreshAllUsers(),
         refreshAuditLog()
       ]);
     } catch (error) {
@@ -904,14 +1266,20 @@ function AdminDashboard() {
         setPendingUsers((currentUsers) => (
           currentUsers.filter((pendingUser) => pendingUser.id !== customer.id)
         ));
-        await refreshPendingUsers();
+        await Promise.all([
+          refreshPendingUsers(),
+          refreshAllUsers()
+        ]);
       } else {
         // Function from userService.js: asks Express to revoke an active customer with a message.
         await revokeCustomer(customer.id, message);
         setActiveCustomers((currentCustomers) => (
           currentCustomers.filter((activeCustomer) => activeCustomer.id !== customer.id)
         ));
-        await refreshActiveCustomers();
+        await Promise.all([
+          refreshActiveCustomers(),
+          refreshAllUsers()
+        ]);
       }
 
       setAccountDecision(null);
@@ -930,6 +1298,57 @@ function AdminDashboard() {
       setUpdatingUserAction("");
     }
   };
+
+  /**
+   * Promotes an active account to admin through the owner-only Express route.
+   */
+  const promoteToAdmin = async (targetUser) => {
+    setUpdatingRoleUserId(targetUser.id);
+    setUpdatingRoleAction("make-admin");
+    setOwnerUserError("");
+
+    try {
+      // Function from userService.js: asks Express to grant admin access.
+      await makeUserAdmin(targetUser.id);
+      await Promise.all([
+        refreshAllUsers(),
+        refreshActiveCustomers(),
+        refreshAuditLog()
+      ]);
+    } catch (error) {
+      console.error(error);
+      setOwnerUserError(error.message || "Unable to make this user an admin.");
+    } finally {
+      setUpdatingRoleUserId("");
+      setUpdatingRoleAction("");
+    }
+  };
+
+  /**
+   * Removes admin privileges through the owner-only Express route.
+   */
+  const removeAdminAccess = async (targetUser) => {
+    setUpdatingRoleUserId(targetUser.id);
+    setUpdatingRoleAction("revoke-admin");
+    setOwnerUserError("");
+
+    try {
+      // Function from userService.js: asks Express to revoke admin access.
+      await revokeUserAdmin(targetUser.id);
+      await Promise.all([
+        refreshAllUsers(),
+        refreshActiveCustomers(),
+        refreshAuditLog()
+      ]);
+    } catch (error) {
+      console.error(error);
+      setOwnerUserError(error.message || "Unable to revoke admin access.");
+    } finally {
+      setUpdatingRoleUserId("");
+      setUpdatingRoleAction("");
+    }
+  };
+
   return <div className="flex h-screen w-full overflow-hidden" style={{ backgroundColor: BS_LIGHT }}>
       {
     /* Sidebar */
@@ -970,7 +1389,7 @@ function AdminDashboard() {
               Main
             </p>
             <div className="space-y-0.5">
-              {NAV.slice(0, 4).map(({ key, label, icon: Icon }) => {
+              {NAV.slice(0, 6).filter((item) => !item.ownerOnly || isOwner).map(({ key, label, icon: Icon }) => {
     const active = section === key;
     return <NavButton
       key={key}
@@ -992,7 +1411,7 @@ function AdminDashboard() {
               Management
             </p>
             <div className="space-y-0.5">
-              {NAV.slice(4, 6).map(({ key, label, icon: Icon }) => {
+              {NAV.slice(6, 8).map(({ key, label, icon: Icon }) => {
     const active = section === key;
     return <NavButton
       key={key}
@@ -1013,7 +1432,7 @@ function AdminDashboard() {
               Account
             </p>
             <div className="space-y-0.5">
-              {NAV.slice(6).map(({ key, label, icon: Icon }) => {
+              {NAV.slice(8).map(({ key, label, icon: Icon }) => {
     const active = section === key;
     return <NavButton
       key={key}
@@ -1052,7 +1471,7 @@ function AdminDashboard() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-xs text-white truncate" style={{ fontWeight: 500 }}>{user?.name}</p>
-                  <p className="text-[10px] truncate" style={{ color: "#6A7A86" }}>Administrator</p>
+                  <p className="text-[10px] truncate" style={{ color: "#6A7A86" }}>{isOwner ? "Owner" : "Administrator"}</p>
                 </div>
               </div>
               <button
@@ -1157,7 +1576,7 @@ function AdminDashboard() {
   }
         <main className="flex-1 overflow-y-auto p-6">
           {section === "dashboard" && <DashboardContent
-    requests={requests}
+    requests={pendingRequests}
     documents={documents}
     pendingCount={pendingCount}
     approvedCount={approvedCount}
@@ -1191,9 +1610,18 @@ function AdminDashboard() {
     setUploadFile={setUploadFile}
     folderName={folderName}
     setFolderName={setFolderName}
+    folderTargetType={folderTargetType}
+    setFolderTargetType={setFolderTargetType}
+    folderTargetCompany={folderTargetCompany}
+    setFolderTargetCompany={setFolderTargetCompany}
+    folderTargetCustomerId={folderTargetCustomerId}
+    setFolderTargetCustomerId={setFolderTargetCustomerId}
     creatingFolder={creatingFolder}
     folderUploadFiles={folderUploadFiles}
-    setFolderUploadFiles={setFolderUploadFiles}
+    folderSharePaths={folderSharePaths}
+    setFolderSharePaths={setFolderSharePaths}
+    expandedFolderSharePaths={expandedFolderSharePaths}
+    setExpandedFolderSharePaths={setExpandedFolderSharePaths}
     folderUploading={folderUploading}
     folderUploadProgress={folderUploadProgress}
     folderUploadDone={folderUploadDone}
@@ -1208,14 +1636,23 @@ function AdminDashboard() {
     onPreviewDocument={setPreviewDocument}
     onDownloadDocument={handleDownloadDocument}
     onEditDocument={setEditingDocument}
+    onEditFolder={setEditingFolder}
     onDeleteDocument={handleDeleteDocument}
     fileRef={fileRef}
     folderFileRef={folderFileRef}
     onUpload={handleUpload}
     onCreateFolder={handleCreateFolder}
+    onFolderUploadFilesChange={handleFolderUploadFilesChange}
     onUploadFolder={handleFolderUpload}
   />}
-          {section === "requests" && <RequestsContent requests={requests} error={requestLoadError} onApprove={approveRequest} onDeny={denyRequest} />}
+          {section === "requests" && <RequestsContent requests={pendingRequests} error={requestLoadError} onApprove={approveRequest} onDeny={denyRequest} />}
+          {section === "access-management" && <AccessManagementContent
+    approvedRequests={activeAccessRequests}
+    documents={documents}
+    error={requestLoadError}
+    onRevoke={revokeAccess}
+    onSaveFolderExclusions={saveFolderAccessExclusions}
+  />}
           {section === "users" && <UserApprovalsContent
     pendingUsers={pendingUsers}
     activeCustomers={activeCustomers}
@@ -1227,7 +1664,18 @@ function AdminDashboard() {
     onDeny={(customer) => setAccountDecision({ customer, type: "deny" })}
     onRevoke={(customer) => setAccountDecision({ customer, type: "revoke" })}
   />}
-          {section === "audit" && <AuditContent auditLog={auditLog} error={auditLoadError} onRevoke={revokeAccess} onGrant={grantAccess} requests={requests} />}
+          {section === "owner-users" && <OwnerUsersContent
+    users={allUsers}
+    error={ownerUserError}
+    updatingUserId={updatingRoleUserId}
+    updatingAction={updatingRoleAction}
+    onMakeAdmin={promoteToAdmin}
+    onRevokeAdmin={removeAdminAccess}
+  />}
+          {section === "audit" && <AuditContent
+    auditLog={auditLog}
+    error={auditLoadError}
+  />}
           {section === "settings" && <SettingsContent user={user} />}
           {section === "profile" && <AdminProfileContent user={user} profilePic={profilePic} setProfilePic={setProfilePic} />}
         </main>
@@ -1241,6 +1689,16 @@ function AdminDashboard() {
     activeCompanies={activeCompanies}
     onClose={() => setEditingDocument(null)}
     onSave={handleUpdateDocument}
+  />}
+      {editingFolder && <FolderEditModal
+    key={editingFolder.id}
+    folder={editingFolder}
+    folders={folders}
+    folderOptions={folderOptions}
+    activeCustomers={activeCustomers}
+    activeCompanies={activeCompanies}
+    onClose={() => setEditingFolder(null)}
+    onSave={handleUpdateFolder}
   />}
       {accountDecision && <AccountDecisionModal
     key={`${accountDecision.type}-${accountDecision.customer.id}`}
@@ -1384,9 +1842,18 @@ function DocumentsContent({
   setUploadFile,
   folderName,
   setFolderName,
+  folderTargetType,
+  setFolderTargetType,
+  folderTargetCompany,
+  setFolderTargetCompany,
+  folderTargetCustomerId,
+  setFolderTargetCustomerId,
   creatingFolder,
   folderUploadFiles,
-  setFolderUploadFiles,
+  folderSharePaths,
+  setFolderSharePaths,
+  expandedFolderSharePaths,
+  setExpandedFolderSharePaths,
   folderUploading,
   folderUploadProgress,
   folderUploadDone,
@@ -1401,11 +1868,13 @@ function DocumentsContent({
   onPreviewDocument,
   onDownloadDocument,
   onEditDocument,
+  onEditFolder,
   onDeleteDocument,
   fileRef,
   folderFileRef,
   onUpload,
   onCreateFolder,
+  onFolderUploadFilesChange,
   onUploadFolder
 }) {
   const folderUploadLabel = folderUploadFiles.length > 0
@@ -1415,6 +1884,11 @@ function DocumentsContent({
   const parentFolderId = currentFolder?.parentFolderId || "";
   const inferredUploadType = uploadFile ? inferDocumentTypeFromFileName(uploadFile.name) : "Select a file";
   const skippedFolderFiles = folderUploadSummary?.skippedFiles || [];
+  const folderShareTree = buildUploadShareTree(folderUploadFiles);
+  const uploadTreeFiles = flattenUploadTreeFiles(folderShareTree);
+  const selectedShareFiles = uploadTreeFiles.filter((file) => folderSharePaths.has(file.path));
+  const allUploadFilesSelected = uploadTreeFiles.length > 0
+    && selectedShareFiles.length === uploadTreeFiles.length;
 
   return <div className="space-y-6">
       {
@@ -1501,6 +1975,7 @@ function DocumentsContent({
     style={{ color: BS_BLACK }}
   >
               <option value="all">All active customers</option>
+              <option value="admin">Admins only</option>
               <option value="company">Specific company</option>
               <option value="customer">Specific customer</option>
             </select>
@@ -1607,19 +2082,56 @@ function DocumentsContent({
               <FolderPlus size={16} style={{ color: BS_GOLD }} />
               <h4 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Create Folder</h4>
             </div>
-            <div className="flex flex-col sm:flex-row gap-2">
+            <div className="space-y-3">
               <input
     type="text"
     value={folderName}
     onChange={(event) => setFolderName(event.target.value)}
     placeholder="Folder name"
-    className="flex-1 px-3 py-2.5 rounded-lg border border-gray-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
+    className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
     style={{ color: BS_BLACK }}
   />
+              <select
+    value={folderTargetType}
+    onChange={(event) => {
+      setFolderTargetType(event.target.value);
+      setFolderTargetCompany("");
+      setFolderTargetCustomerId("");
+    }}
+    className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
+    style={{ color: BS_BLACK }}
+  >
+                <option value="all">All active customers</option>
+                <option value="admin">Admins only</option>
+                <option value="company">Specific company</option>
+                <option value="customer">Specific customer</option>
+              </select>
+              {folderTargetType === "company" && <select
+    value={folderTargetCompany}
+    onChange={(event) => setFolderTargetCompany(event.target.value)}
+    className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
+    style={{ color: BS_BLACK }}
+    required
+  >
+                  <option value="">Select an approved company</option>
+                  {activeCompanies.map((company) => <option key={company} value={company}>{company}</option>)}
+                </select>}
+              {folderTargetType === "customer" && <select
+    value={folderTargetCustomerId}
+    onChange={(event) => setFolderTargetCustomerId(event.target.value)}
+    className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
+    style={{ color: BS_BLACK }}
+    required
+  >
+                  <option value="">Select an approved customer</option>
+                  {activeCustomers.map((customer) => <option key={customer.id} value={customer.id}>
+                      {customer.name || customer.email} {customer.company ? `— ${customer.company}` : ""}
+                    </option>)}
+                </select>}
               <button
     type="submit"
     disabled={creatingFolder}
-    className="px-4 py-2.5 rounded-lg text-sm transition-opacity disabled:opacity-50 hover:opacity-90"
+    className="w-full px-4 py-2.5 rounded-lg text-sm transition-opacity disabled:opacity-50 hover:opacity-90"
     style={{ backgroundColor: BS_BLACK, color: "#FFFFFF", fontWeight: 600 }}
   >
                 {creatingFolder ? "Creating..." : "Create"}
@@ -1649,8 +2161,118 @@ function DocumentsContent({
     multiple
     webkitdirectory="true"
     directory=""
-    onChange={(event) => setFolderUploadFiles(Array.from(event.target.files || []))}
+    onChange={(event) => onFolderUploadFilesChange(event.target.files)}
   />
+            {folderUploadFiles.length > 0 && <div className="mt-4 rounded-lg border border-gray-200 bg-white">
+                <div className="border-b border-gray-100 px-3 py-3">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-sm" style={{ color: BS_BLACK, fontWeight: 700 }}>
+                        Choose what to share
+                      </p>
+                      <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
+                        Checked folders share their included documents. Unchecked files stay uploaded for admins only.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+    type="button"
+    onClick={() => setFolderSharePaths(new Set(uploadTreeFiles.map((file) => file.path)))}
+    className="px-3 py-1.5 rounded-lg text-xs border transition-colors hover:bg-gray-50"
+    style={{ borderColor: "#D1D5DB", color: BS_BLACK, fontWeight: 600 }}
+  >
+                        Select all
+                      </button>
+                      <button
+    type="button"
+    onClick={() => setFolderSharePaths(new Set())}
+    className="px-3 py-1.5 rounded-lg text-xs border transition-colors hover:bg-gray-50"
+    style={{ borderColor: "#D1D5DB", color: BS_GRAY, fontWeight: 600 }}
+  >
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div className="grid gap-4 p-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(220px,0.8fr)]">
+                  <div className="max-h-72 overflow-auto rounded-lg border border-gray-100 bg-gray-50 p-2">
+                    <FolderShareTree
+    nodes={folderShareTree}
+    selectedPaths={folderSharePaths}
+    setSelectedPaths={setFolderSharePaths}
+    expandedPaths={expandedFolderSharePaths}
+    setExpandedPaths={setExpandedFolderSharePaths}
+  />
+                  </div>
+                  <div className="rounded-lg border border-gray-100 bg-gray-50 p-3">
+                    <p className="text-xs uppercase tracking-wide" style={{ color: BS_GRAY, fontWeight: 700 }}>
+                      Review selected items
+                    </p>
+                    <p className="mt-2 text-sm" style={{ color: BS_BLACK, fontWeight: 700 }}>
+                      {selectedShareFiles.length} of {uploadTreeFiles.length} documents selected
+                    </p>
+                    {allUploadFilesSelected && <p className="mt-1 text-xs" style={{ color: "#166534", fontWeight: 600 }}>
+                        Entire uploaded folder will be shared.
+                      </p>}
+                    {!allUploadFilesSelected && selectedShareFiles.length > 0 && <ul className="mt-2 max-h-40 space-y-1 overflow-auto text-xs" style={{ color: BS_GRAY }}>
+                        {selectedShareFiles.slice(0, 8).map((file) => <li key={file.path} className="truncate">
+                            {file.path}
+                          </li>)}
+                        {selectedShareFiles.length > 8 && <li style={{ color: BS_BLACK, fontWeight: 600 }}>
+                            +{selectedShareFiles.length - 8} more selected
+                          </li>}
+                      </ul>}
+                    {selectedShareFiles.length === 0 && <p className="mt-2 text-xs text-red-700">
+                        Select at least one folder or file before uploading.
+                      </p>}
+                    <div className="mt-4 border-t border-gray-200 pt-3">
+                      <label className="block text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 600 }}>
+                        Sharing audience
+                      </label>
+                      <select
+    value={uploadTargetType}
+    onChange={(event) => {
+      setUploadTargetType(event.target.value);
+      setUploadTargetCompany("");
+      setUploadTargetCustomerId("");
+    }}
+    className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
+    style={{ color: BS_BLACK }}
+  >
+                        <option value="all">All active customers</option>
+                        <option value="admin">Admins only</option>
+                        <option value="company">Specific company</option>
+                        <option value="customer">Specific customer</option>
+                      </select>
+                      {uploadTargetType === "company" && <select
+    value={uploadTargetCompany}
+    onChange={(event) => setUploadTargetCompany(event.target.value)}
+    className="mt-2 w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
+    style={{ color: BS_BLACK }}
+    required
+  >
+                          <option value="">Select an approved company</option>
+                          {activeCompanies.map((company) => <option key={company} value={company}>{company}</option>)}
+                        </select>}
+                      {uploadTargetType === "customer" && <select
+    value={uploadTargetCustomerId}
+    onChange={(event) => setUploadTargetCustomerId(event.target.value)}
+    className="mt-2 w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
+    style={{ color: BS_BLACK }}
+    required
+  >
+                          <option value="">Select an approved customer</option>
+                          {activeCustomers.map((customer) => <option key={customer.id} value={customer.id}>
+                              {customer.name || customer.email} {customer.company ? `— ${customer.company}` : ""}
+                            </option>)}
+                        </select>}
+                      <p className="text-xs mt-2" style={{ color: "#9CA3AF" }}>
+                        This applies only to the checked folder items in this upload.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>}
             {folderUploading && <div className="mt-3">
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-xs" style={{ color: BS_GRAY }}>Uploading folder...</span>
@@ -1668,6 +2290,7 @@ function DocumentsContent({
                   <CheckCircle size={16} />
                   <span>
                     Uploaded {folderUploadSummary?.uploadedCount || 0} documents.
+                    {folderUploadSummary?.sharedCount !== undefined ? ` Shared ${folderUploadSummary.sharedCount}.` : ""}
                     {skippedFolderFiles.length > 0 ? ` Skipped ${skippedFolderFiles.length} files.` : ""}
                   </span>
                 </div>
@@ -1690,11 +2313,11 @@ function DocumentsContent({
               </div>}
             <button
     type="submit"
-    disabled={folderUploading}
+    disabled={folderUploading || folderUploadFiles.length === 0 || selectedShareFiles.length === 0}
     className="mt-3 px-4 py-2.5 rounded-lg text-sm transition-opacity disabled:opacity-50 hover:opacity-90"
     style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 600 }}
   >
-              {folderUploading ? "Uploading..." : "Upload Folder"}
+              {folderUploading ? "Uploading..." : "Upload Selected Folder Items"}
             </button>
           </form>
         </div>
@@ -1764,14 +2387,26 @@ function DocumentsContent({
                   <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>—</td>
                   <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{folderItem.createdByName || "Admin"}</td>
                   <td className="px-4 py-3.5">
-                    <button
+                    <div className="flex items-center gap-2">
+                      <button
     type="button"
     onClick={() => setCurrentFolderId(folderItem.id)}
     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
     style={{ borderColor: "#D1D5DB", color: BS_GRAY }}
   >
-                      Open <ChevronRight size={11} />
-                    </button>
+                        Open <ChevronRight size={11} />
+                      </button>
+                      <button
+    type="button"
+    onClick={() => onEditFolder(folderItem)}
+    className="h-7 w-7 flex items-center justify-center rounded-lg border transition-opacity hover:opacity-80"
+    style={{ borderColor: "#D1D5DB", color: BS_GRAY }}
+    aria-label={`Edit ${folderItem.name}`}
+    title="Edit folder"
+  >
+                        <Pencil size={12} />
+                      </button>
+                    </div>
                   </td>
                 </tr>)}
               {visibleDocuments.map((doc, i) => <tr key={doc.id} style={{ borderBottom: i < visibleDocuments.length - 1 ? "1px solid #F3F4F6" : "none" }}>
@@ -1843,14 +2478,200 @@ function DocumentsContent({
       </div>
     </div>;
 }
+
+/**
+ * Checkbox that supports the native mixed state for partially selected folders.
+ */
+function ShareCheckbox({ checked, indeterminate = false, onChange, ariaLabel }) {
+  const checkboxRef = useRef(null);
+
+  useEffect(() => {
+    if (checkboxRef.current) {
+      checkboxRef.current.indeterminate = indeterminate;
+    }
+  }, [indeterminate]);
+
+  return <input
+    ref={checkboxRef}
+    type="checkbox"
+    checked={checked}
+    aria-label={ariaLabel}
+    onChange={(event) => onChange(event.target.checked)}
+    className="h-4 w-4 rounded border-gray-300 text-[#F2A900] focus:ring-[#F2A900]"
+  />;
+}
+
+/**
+ * Renders the selectable folder tree before a folder upload is finalized.
+ */
+function FolderShareTree({
+  nodes,
+  selectedPaths,
+  setSelectedPaths,
+  expandedPaths,
+  setExpandedPaths
+}) {
+  if (nodes.length === 0) {
+    return <p className="px-2 py-3 text-xs" style={{ color: BS_GRAY }}>
+      No supported folder items found.
+    </p>;
+  }
+
+  return <div className="space-y-1">
+    {nodes.map((node) => <FolderShareNode
+      key={node.id}
+      node={node}
+      depth={0}
+      selectedPaths={selectedPaths}
+      setSelectedPaths={setSelectedPaths}
+      expandedPaths={expandedPaths}
+      setExpandedPaths={setExpandedPaths}
+    />)}
+  </div>;
+}
+
+/**
+ * Renders one selectable folder plus its nested folders/files.
+ */
+function FolderShareNode({
+  node,
+  depth,
+  selectedPaths,
+  setSelectedPaths,
+  expandedPaths,
+  setExpandedPaths
+}) {
+  const isExpanded = expandedPaths.has(node.path);
+  const stats = uploadFolderSelectionStats(node, selectedPaths);
+  const descendantFilePaths = collectUploadFileNodes(node).map((file) => file.path);
+
+  const toggleExpanded = () => {
+    setExpandedPaths((currentPaths) => {
+      const nextPaths = new Set(currentPaths);
+
+      if (nextPaths.has(node.path)) {
+        nextPaths.delete(node.path);
+      } else {
+        nextPaths.add(node.path);
+      }
+
+      return nextPaths;
+    });
+  };
+
+  const setFolderChecked = (checked) => {
+    setSelectedPaths((currentPaths) => {
+      const nextPaths = new Set(currentPaths);
+
+      descendantFilePaths.forEach((filePath) => {
+        if (checked) {
+          nextPaths.add(filePath);
+        } else {
+          nextPaths.delete(filePath);
+        }
+      });
+
+      return nextPaths;
+    });
+  };
+
+  return <div>
+    <div
+      className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-white"
+      style={{ paddingLeft: `${depth * 16 + 8}px` }}
+    >
+      <button
+        type="button"
+        onClick={toggleExpanded}
+        className="h-5 w-5 inline-flex items-center justify-center rounded hover:bg-gray-100"
+        aria-label={isExpanded ? `Collapse ${node.name}` : `Expand ${node.name}`}
+      >
+        {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+      </button>
+      <ShareCheckbox
+        checked={stats.checked}
+        indeterminate={stats.indeterminate}
+        onChange={setFolderChecked}
+        ariaLabel={`Share ${node.name}`}
+      />
+      <Folder size={15} style={{ color: BS_GOLD }} />
+      <span className="min-w-0 flex-1 truncate text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>
+        {node.name}
+      </span>
+      <span className="text-[11px]" style={{ color: BS_GRAY }}>
+        {stats.selectedCount}/{stats.totalCount}
+      </span>
+    </div>
+    {isExpanded && <div className="space-y-1">
+      {node.folders.map((folderNode) => <FolderShareNode
+        key={folderNode.id}
+        node={folderNode}
+        depth={depth + 1}
+        selectedPaths={selectedPaths}
+        setSelectedPaths={setSelectedPaths}
+        expandedPaths={expandedPaths}
+        setExpandedPaths={setExpandedPaths}
+      />)}
+      {node.files.map((file) => <FolderShareFile
+        key={file.id}
+        file={file}
+        depth={depth + 1}
+        selectedPaths={selectedPaths}
+        setSelectedPaths={setSelectedPaths}
+      />)}
+    </div>}
+  </div>;
+}
+
+/**
+ * Renders one selectable file inside the folder sharing tree.
+ */
+function FolderShareFile({ file, depth, selectedPaths, setSelectedPaths }) {
+  const checked = selectedPaths.has(file.path);
+
+  const setFileChecked = (nextChecked) => {
+    setSelectedPaths((currentPaths) => {
+      const nextPaths = new Set(currentPaths);
+
+      if (nextChecked) {
+        nextPaths.add(file.path);
+      } else {
+        nextPaths.delete(file.path);
+      }
+
+      return nextPaths;
+    });
+  };
+
+  return <div
+    className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-white"
+    style={{ paddingLeft: `${depth * 16 + 33}px` }}
+  >
+    <ShareCheckbox
+      checked={checked}
+      onChange={setFileChecked}
+      ariaLabel={`Share ${file.name}`}
+    />
+    <FileText size={14} style={{ color: BS_GRAY }} />
+    <div className="min-w-0 flex-1">
+      <p className="truncate text-xs" style={{ color: BS_BLACK, fontWeight: 600 }}>
+        {file.name}
+      </p>
+      <p className="truncate text-[11px]" style={{ color: BS_GRAY }}>
+        {file.typeLabel} · {file.sizeLabel}
+      </p>
+    </div>
+  </div>;
+}
+
 /**
  * Admin access-request queue wrapper.
  */
 function RequestsContent({ requests, error, onApprove, onDeny }) {
   return <div className="bg-white rounded-xl border border-gray-100">
       <div className="px-5 py-4 border-b border-gray-100">
-        <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>All Access Requests</h3>
-        <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>Manage customer document access requests</p>
+        <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Pending Access Requests</h3>
+        <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>Approve or deny new customer document and folder requests</p>
       </div>
       {error && <div className="mx-5 mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
           {error}
@@ -1902,13 +2723,298 @@ function RequestsTable({ requests, onApprove, onDeny }) {
             </tr>)}
           {requests.length === 0 && <tr>
               <td colSpan={6} className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
-                No access requests found.
+                No pending access requests.
               </td>
             </tr>}
         </tbody>
       </table>
     </div>;
 }
+
+/**
+ * Shows approved access and lets admins narrow folder access by excluding nested documents.
+ */
+function AccessManagementContent({
+  approvedRequests,
+  documents,
+  error,
+  onRevoke,
+  onSaveFolderExclusions
+}) {
+  const [openFolderRequestId, setOpenFolderRequestId] = useState("");
+  const [excludedDocumentIds, setExcludedDocumentIds] = useState(new Set());
+  const [savingFolderRequestId, setSavingFolderRequestId] = useState("");
+  const [folderPanelError, setFolderPanelError] = useState("");
+
+  /**
+   * Opens or closes a folder request panel and loads its current excluded documents.
+   */
+  const toggleFolderRequest = (request) => {
+    if (openFolderRequestId === request.id) {
+      setOpenFolderRequestId("");
+      setExcludedDocumentIds(new Set());
+      setFolderPanelError("");
+      return;
+    }
+
+    setOpenFolderRequestId(request.id);
+    setExcludedDocumentIds(new Set(request.excludedDocumentIds || []));
+    setFolderPanelError("");
+  };
+
+  /**
+   * Marks one nested document as unshared or restores it for the opened folder request.
+   */
+  const toggleExcludedDocument = (documentId) => {
+    setExcludedDocumentIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+
+      if (nextIds.has(documentId)) {
+        nextIds.delete(documentId);
+      } else {
+        nextIds.add(documentId);
+      }
+
+      return nextIds;
+    });
+  };
+
+  /**
+   * Persists the nested document exclusion list through Express.
+   */
+  const saveExcludedDocuments = async (requestId) => {
+    setSavingFolderRequestId(requestId);
+    setFolderPanelError("");
+
+    try {
+      await onSaveFolderExclusions(requestId, Array.from(excludedDocumentIds));
+    } catch (saveError) {
+      setFolderPanelError(saveError.message || "Unable to save folder access changes.");
+    } finally {
+      setSavingFolderRequestId("");
+    }
+  };
+
+  return <div className="bg-white rounded-xl border border-gray-100">
+    <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+      <div>
+        <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Active Access</h3>
+        <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
+          Revoke currently approved access or unshare specific documents inside approved folder access.
+        </p>
+      </div>
+      <span
+        className="text-xs px-2.5 py-1 rounded-full"
+        style={{ backgroundColor: "rgba(34,197,94,0.12)", color: "#166534", fontWeight: 500 }}
+      >
+        {approvedRequests.length} active
+      </span>
+    </div>
+
+    {error && <div className="mx-5 mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
+      {error}
+    </div>}
+
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr style={{ backgroundColor: "#FAFAFA" }}>
+            {["Customer", "Company", "Resource", "Scope", "Granted", "Granted By", "Action"].map((heading) => <th
+              key={heading}
+              className="px-4 py-3 text-left text-xs border-b border-gray-100"
+              style={{ color: BS_GRAY, fontWeight: 500 }}
+            >
+              {heading}
+            </th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {approvedRequests.map((request, index) => {
+            const isFolder = request.resourceType === "folder";
+            const resourceTitle = request.documentTitle
+              || request.folderPath
+              || request.folderName
+              || (isFolder ? "Folder" : "Document");
+            const scopeLabel = isFolder
+              ? "Folder and nested contents"
+              : "Single document";
+            const folderDocuments = isFolder
+              ? documents
+                .filter((document) => (
+                  accessRequestContainsDocument(request, document)
+                  && documentTargetsAccessRequest(request, document)
+                ))
+                .sort((a, b) => (
+                  `${a.folderPath || ""}/${a.title || ""}`.localeCompare(`${b.folderPath || ""}/${b.title || ""}`)
+                ))
+              : [];
+            const isOpen = openFolderRequestId === request.id;
+            const currentExcludedCount = isOpen
+              ? excludedDocumentIds.size
+              : (request.excludedDocumentIds || []).length;
+
+            return [
+              <tr
+                key={request.id}
+                style={{ borderBottom: isOpen ? "none" : index < approvedRequests.length - 1 ? "1px solid #F3F4F6" : "none" }}
+              >
+                <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>{request.customerName || "—"}</td>
+                <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{request.company || "—"}</td>
+                <td className="px-4 py-3.5 text-xs max-w-[260px]" style={{ color: BS_BLACK }}>
+                  <button
+                    type="button"
+                    onClick={() => isFolder && toggleFolderRequest(request)}
+                    disabled={!isFolder}
+                    className="flex items-center gap-2 max-w-full text-left disabled:cursor-default"
+                  >
+                    {isFolder
+                      ? <Folder size={14} style={{ color: BS_GOLD }} />
+                      : <FileText size={14} style={{ color: BS_GRAY }} />}
+                    <span className="truncate">{resourceTitle}</span>
+                    {isFolder && <ChevronRight
+                      size={13}
+                      className="shrink-0 transition-transform"
+                      style={{
+                        color: BS_GRAY,
+                        transform: isOpen ? "rotate(90deg)" : "rotate(0deg)"
+                      }}
+                    />}
+                  </button>
+                </td>
+                <td className="px-4 py-3.5">
+                  <div className="flex flex-col items-start gap-1">
+                    <span
+                      className="text-xs px-2 py-0.5 rounded"
+                      style={{
+                        backgroundColor: isFolder ? "rgba(242,169,0,0.12)" : "#F3F4F6",
+                        color: isFolder ? "#A37200" : BS_GRAY,
+                        fontWeight: 500
+                      }}
+                    >
+                      {scopeLabel}
+                    </span>
+                    {isFolder && currentExcludedCount > 0 && <span className="text-[11px]" style={{ color: BS_MAROON, fontWeight: 500 }}>
+                      {currentExcludedCount} unshared
+                    </span>}
+                  </div>
+                </td>
+                <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{formatDate(request.reviewedAt || request.createdAt)}</td>
+                <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{request.reviewedByName || "Admin"}</td>
+                <td className="px-4 py-3.5">
+                  <div className="flex items-center gap-2">
+                    {isFolder && <button
+                      type="button"
+                      onClick={() => toggleFolderRequest(request)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
+                      style={{ borderColor: "#D1D5DB", color: BS_BLACK, fontWeight: 500 }}
+                    >
+                      {isOpen ? "Close" : "Manage"}
+                    </button>}
+                    <button
+                      type="button"
+                      onClick={() => onRevoke(request.id)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
+                      style={{ borderColor: BS_MAROON, color: BS_MAROON, fontWeight: 500 }}
+                    >
+                      <RotateCcw size={11} />
+                      {isFolder ? "Revoke Folder" : "Revoke Document"}
+                    </button>
+                  </div>
+                </td>
+              </tr>,
+              isFolder && isOpen && <tr key={`${request.id}-documents`}>
+                <td colSpan={7} className="px-4 pb-5" style={{ borderBottom: index < approvedRequests.length - 1 ? "1px solid #F3F4F6" : "none" }}>
+                  <div className="rounded-lg border border-gray-100 bg-gray-50 p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-3">
+                      <div>
+                        <h4 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Folder Documents</h4>
+                        <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
+                          Check documents to unshare them from this customer's folder access.
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setExcludedDocumentIds(new Set(folderDocuments.map((document) => document.id)))}
+                          className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs"
+                          style={{ color: BS_GRAY, fontWeight: 500 }}
+                        >
+                          Unshare all
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setExcludedDocumentIds(new Set())}
+                          className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs"
+                          style={{ color: BS_GRAY, fontWeight: 500 }}
+                        >
+                          Restore all
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => saveExcludedDocuments(request.id)}
+                          disabled={savingFolderRequestId === request.id}
+                          className="px-3 py-1.5 rounded-lg text-xs disabled:opacity-50"
+                          style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 600 }}
+                        >
+                          {savingFolderRequestId === request.id ? "Saving..." : "Save Changes"}
+                        </button>
+                      </div>
+                    </div>
+
+                    {folderPanelError && <div className="mb-3 px-3 py-2 rounded-lg text-xs text-red-700 bg-red-50 border border-red-100">
+                      {folderPanelError}
+                    </div>}
+
+                    <div className="rounded-lg border border-gray-100 bg-white max-h-80 overflow-y-auto">
+                      {folderDocuments.length === 0 ? <div className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
+                        No documents found inside this folder.
+                      </div> : folderDocuments.map((document, documentIndex) => {
+                        const isExcluded = excludedDocumentIds.has(document.id);
+
+                        return <label
+                          key={document.id}
+                          className="flex items-start gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50"
+                          style={{ borderBottom: documentIndex < folderDocuments.length - 1 ? "1px solid #F3F4F6" : "none" }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isExcluded}
+                            onChange={() => toggleExcludedDocument(document.id)}
+                            className="mt-0.5 accent-[#F2A900]"
+                          />
+                          <FileText size={14} className="mt-0.5 shrink-0" style={{ color: isExcluded ? BS_MAROON : BS_GRAY }} />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="text-xs truncate" style={{ color: BS_BLACK, fontWeight: 600 }}>
+                                {document.title}
+                              </p>
+                              {isExcluded && <span className="text-[11px] px-2 py-0.5 rounded-full" style={{ backgroundColor: "rgba(138,42,43,0.12)", color: BS_MAROON, fontWeight: 600 }}>
+                                Unshared
+                              </span>}
+                            </div>
+                            <p className="text-[11px] mt-0.5 truncate" style={{ color: BS_GRAY }}>
+                              {document.folderPath || "All Documents"} · {document.type} · {document.size}
+                            </p>
+                          </div>
+                        </label>;
+                      })}
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            ].filter(Boolean);
+          })}
+          {approvedRequests.length === 0 && <tr>
+            <td colSpan={7} className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
+              No approved access to manage.
+            </td>
+          </tr>}
+        </tbody>
+      </table>
+    </div>
+  </div>;
+}
+
 /**
  * Admin customer-approval table with email/location review and account decisions.
  */
@@ -2100,6 +3206,109 @@ function UserApprovalsContent({
     </div>
   </div>;
 }
+
+/**
+ * Owner-only table for viewing every user and changing admin privileges.
+ */
+function OwnerUsersContent({
+  users,
+  error,
+  updatingUserId,
+  updatingAction,
+  onMakeAdmin,
+  onRevokeAdmin
+}) {
+  return <div className="bg-white rounded-xl border border-gray-100">
+    <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+      <div>
+        <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>All Users</h3>
+        <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
+          Owner-only role management. Assign exactly one owner manually in Firestore.
+        </p>
+      </div>
+      <span
+        className="text-xs px-2.5 py-1 rounded-full"
+        style={{ backgroundColor: "rgba(242,169,0,0.12)", color: "#A37200", fontWeight: 500 }}
+      >
+        {users.length} users
+      </span>
+    </div>
+
+    {error && <div className="mx-5 mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
+      {error}
+    </div>}
+
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr style={{ backgroundColor: "#FAFAFA" }}>
+            {["Name", "Email", "Company", "Phone", "Role", "Status", "Created", "Action"].map((heading) => <th
+              key={heading}
+              className="px-4 py-3 text-left text-xs border-b border-gray-100"
+              style={{ color: BS_GRAY, fontWeight: 500 }}
+            >
+              {heading}
+            </th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {users.map((account, index) => {
+            const isUpdating = updatingUserId === account.id;
+            const isOwnerAccount = account.role === "owner";
+            const canMakeAdmin = account.role === "customer" && account.status === "active";
+            const canRevokeAdmin = account.role === "admin";
+
+            return <tr
+              key={account.id}
+              style={{ borderBottom: index < users.length - 1 ? "1px solid #F3F4F6" : "none" }}
+            >
+              <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>{account.name || "—"}</td>
+              <td className="px-4 py-3.5 text-xs" style={{ color: BS_BLACK }}>{account.email || "—"}</td>
+              <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{account.company || "—"}</td>
+              <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{account.phone || "—"}</td>
+              <td className="px-4 py-3.5"><RoleBadge role={account.role} /></td>
+              <td className="px-4 py-3.5"><StatusBadge status={account.status} /></td>
+              <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{formatDate(account.createdAt)}</td>
+              <td className="px-4 py-3.5">
+                {isUpdating ? <span className="inline-flex items-center gap-1.5 text-xs" style={{ color: BS_GRAY, fontWeight: 500 }}>
+                  <Clock size={12} />
+                  {updatingAction === "make-admin" ? "Making admin..." : "Revoking admin..."}
+                </span> : <div className="flex items-center gap-2">
+                  {canMakeAdmin && <button
+                    type="button"
+                    onClick={() => onMakeAdmin(account)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80"
+                    style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 600 }}
+                  >
+                    <ShieldCheck size={12} /> Make Admin
+                  </button>}
+                  {canRevokeAdmin && <button
+                    type="button"
+                    onClick={() => onRevokeAdmin(account)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
+                    style={{ borderColor: BS_MAROON, color: BS_MAROON, fontWeight: 500 }}
+                  >
+                    <XCircle size={12} /> Revoke Admin
+                  </button>}
+                  {isOwnerAccount && <span className="text-xs" style={{ color: BS_GRAY, fontWeight: 600 }}>Owner locked</span>}
+                  {!isOwnerAccount && !canMakeAdmin && !canRevokeAdmin && <span className="text-xs" style={{ color: BS_GRAY }}>
+                    {account.status === "active" ? "No role action" : "Approve first"}
+                  </span>}
+                </div>}
+              </td>
+            </tr>;
+          })}
+          {users.length === 0 && <tr>
+            <td colSpan={8} className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
+              No users found.
+            </td>
+          </tr>}
+        </tbody>
+      </table>
+    </div>
+  </div>;
+}
+
 /**
  * Two-step modal for deny/revoke account decisions that require a message.
  */
@@ -2403,11 +3612,16 @@ function DocumentAccessDecisionModal({
 /**
  * Audit-log view for account, request, document, and download activity.
  */
-function AuditContent({ auditLog, error, onRevoke, onGrant, requests }) {
+function AuditContent({
+  auditLog,
+  error
+}) {
   return <div className="bg-white rounded-xl border border-gray-100">
       <div className="px-5 py-4 border-b border-gray-100">
         <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Audit Log</h3>
-        <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>Complete record of all document access actions</p>
+        <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
+          Read-only record of account, document, folder, download, and access activity.
+        </p>
       </div>
       {error && <div className="mx-5 mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
           {error}
@@ -2416,18 +3630,13 @@ function AuditContent({ auditLog, error, onRevoke, onGrant, requests }) {
         <table className="w-full text-sm">
           <thead>
             <tr style={{ backgroundColor: "#FAFAFA" }}>
-              {["Customer", "Company", "Document", "Action", "Performed By", "Timestamp", "Action"].map((h, i) => <th key={`${h}${i}`} className="px-4 py-3 text-left text-xs border-b border-gray-100" style={{ color: BS_GRAY, fontWeight: 500 }}>
+              {["Customer", "Company", "Document", "Action", "Performed By", "Timestamp"].map((h) => <th key={h} className="px-4 py-3 text-left text-xs border-b border-gray-100" style={{ color: BS_GRAY, fontWeight: 500 }}>
                   {h}
                 </th>)}
             </tr>
           </thead>
           <tbody>
-            {auditLog.map((entry, i) => {
-    const req = requests.find((r) => r.id === entry.requestId);
-    const canRevoke = req?.status === "approved" && entry.action === "Access Granted";
-    const canGrant = (req?.status === "denied" && entry.action === "Access Denied")
-      || (req?.status === "revoked" && entry.action === "Access Revoked");
-    return <tr key={entry.id} style={{ borderBottom: i < auditLog.length - 1 ? "1px solid #F3F4F6" : "none" }}>
+            {auditLog.map((entry, i) => <tr key={entry.id} style={{ borderBottom: i < auditLog.length - 1 ? "1px solid #F3F4F6" : "none" }}>
                   <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>{entry.customer}</td>
                   <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{entry.company}</td>
                   <td className="px-4 py-3.5 text-xs max-w-[180px] truncate" style={{ color: BS_BLACK }}>{entry.document}</td>
@@ -2436,33 +3645,18 @@ function AuditContent({ auditLog, error, onRevoke, onGrant, requests }) {
                   </td>
                   <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{entry.admin || entry.customer || "—"}</td>
                   <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{entry.timestamp}</td>
-                  <td className="px-4 py-3.5">
-                    {canRevoke ? <button
-      onClick={() => onRevoke(entry.requestId)}
-      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
-      style={{ borderColor: BS_MAROON, color: BS_MAROON }}
-    >
-                        <RotateCcw size={11} /> Revoke
-                      </button> : canGrant ? <button
-      onClick={() => onGrant(entry.requestId)}
-      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80"
-      style={{ backgroundColor: "rgba(34,197,94,0.1)", color: "#166534" }}
-    >
-                        <CheckCircle size={11} /> Grant Access
-                      </button> : <span className="text-xs" style={{ color: "#C4C9CE" }}>—</span>}
-                  </td>
-                </tr>;
-  })}
+                </tr>)}
             {auditLog.length === 0 && <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
+                <td colSpan={6} className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
                   No audit activity yet.
                 </td>
               </tr>}
           </tbody>
         </table>
       </div>
-    </div>;
+  </div>;
 }
+
 /**
  * Modal form for editing document metadata and target audience.
  */
@@ -2571,6 +3765,7 @@ function DocumentEditModal({
     className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm"
   >
               <option value="all">All active customers</option>
+              <option value="admin">Admins only</option>
               <option value="company">Specific company</option>
               <option value="customer">Specific customer</option>
             </select>
@@ -2606,6 +3801,173 @@ function DocumentEditModal({
       </form>
     </div>;
 }
+
+/**
+ * Modal form for editing folder metadata and applying rules to nested documents.
+ */
+function FolderEditModal({
+  folder,
+  folders,
+  folderOptions,
+  activeCustomers,
+  activeCompanies,
+  onClose,
+  onSave
+}) {
+  const [form, setForm] = useState({
+    name: folder.name || "",
+    parentFolderId: folder.parentFolderId || "",
+    category: "__keep",
+    targetType: "__keep",
+    targetCompany: "",
+    targetCustomerId: ""
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const folderMap = new Map(folders.map((folderItem) => [folderItem.id, folderItem]));
+  const availableFolderOptions = folderOptions.filter((folderOption) => {
+    if (!folderOption.id) return true;
+    let parentCheck = folderMap.get(folderOption.id);
+
+    while (parentCheck) {
+      if (parentCheck.id === folder.id) {
+        return false;
+      }
+
+      parentCheck = folderMap.get(parentCheck.parentFolderId);
+    }
+
+    return true;
+  });
+
+  /**
+   * Updates one field in the folder edit form.
+   */
+  const update = (field) => (event) => {
+    setForm((previous) => ({
+      ...previous,
+      [field]: event.target.value
+    }));
+  };
+
+  /**
+   * Sends edited folder metadata back to the admin dashboard handler.
+   */
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+
+    try {
+      await onSave(folder.id, form);
+    } catch (saveError) {
+      setError(saveError.message || "Unable to update folder.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+      <form onSubmit={handleSubmit} className="w-full max-w-lg rounded-lg bg-white border border-gray-100 shadow-xl">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <div>
+            <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Edit Folder</h3>
+            <p className="text-xs mt-0.5 truncate max-w-sm" style={{ color: BS_GRAY }}>{folder.path || folder.name}</p>
+          </div>
+          <button
+    type="button"
+    onClick={onClose}
+    className="h-8 w-8 flex items-center justify-center rounded-lg hover:bg-gray-100"
+    aria-label="Close edit folder"
+  >
+            <XCircle size={16} style={{ color: BS_GRAY }} />
+          </button>
+        </div>
+        <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="sm:col-span-2">
+            <label className="block text-xs mb-1.5" style={{ color: BS_GRAY }}>Folder Name</label>
+            <input
+    value={form.name}
+    onChange={update("name")}
+    required
+    className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
+  />
+          </div>
+          <div>
+            <label className="block text-xs mb-1.5" style={{ color: BS_GRAY }}>Folder Destination</label>
+            <select value={form.parentFolderId} onChange={update("parentFolderId")} className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm">
+              {availableFolderOptions.map((folderOption) => <option key={folderOption.id || "root"} value={folderOption.id}>
+                  {folderOption.label}
+                </option>)}
+            </select>
+            <p className="text-xs mt-1" style={{ color: "#9CA3AF" }}>
+              Moves this folder in the admin folder list.
+            </p>
+          </div>
+          <div>
+            <label className="block text-xs mb-1.5" style={{ color: BS_GRAY }}>Category</label>
+            <select value={form.category} onChange={update("category")} className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm">
+              <option value="__keep">Keep existing categories</option>
+              {["Safety", "Technical", "Compliance", "Operations", "Legal", "Other"].map((category) => <option key={category} value={category}>{category}</option>)}
+            </select>
+            <p className="text-xs mt-1" style={{ color: "#9CA3AF" }}>
+              Applies to documents inside this folder and subfolders.
+            </p>
+          </div>
+          <div className="sm:col-span-2">
+            <label className="block text-xs mb-1.5" style={{ color: BS_GRAY }}>Target Audience</label>
+            <select
+    value={form.targetType}
+    onChange={(event) => setForm((previous) => ({
+      ...previous,
+      targetType: event.target.value,
+      targetCompany: "",
+      targetCustomerId: ""
+    }))}
+    className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm"
+  >
+              <option value="__keep">Keep existing audience</option>
+              <option value="all">All active customers</option>
+              <option value="admin">Admins only</option>
+              <option value="company">Specific company</option>
+              <option value="customer">Specific customer</option>
+            </select>
+            <p className="text-xs mt-1" style={{ color: "#9CA3AF" }}>
+              Audience changes apply to documents in this folder tree; only share-enabled documents are visible to customers.
+            </p>
+          </div>
+          {form.targetType === "company" && <div className="sm:col-span-2">
+              <label className="block text-xs mb-1.5" style={{ color: BS_GRAY }}>Company</label>
+              <select value={form.targetCompany} onChange={update("targetCompany")} required className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm">
+                <option value="">Select company</option>
+                {activeCompanies.map((company) => <option key={company} value={company}>{company}</option>)}
+              </select>
+            </div>}
+          {form.targetType === "customer" && <div className="sm:col-span-2">
+              <label className="block text-xs mb-1.5" style={{ color: BS_GRAY }}>Customer</label>
+              <select value={form.targetCustomerId} onChange={update("targetCustomerId")} required className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm">
+                <option value="">Select customer</option>
+                {activeCustomers.map((customer) => <option key={customer.id} value={customer.id}>
+                    {customer.name || customer.email} {customer.company ? `— ${customer.company}` : ""}
+                  </option>)}
+              </select>
+            </div>}
+          {error && <div className="sm:col-span-2 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
+              {error}
+            </div>}
+        </div>
+        <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-100">
+          <button type="button" onClick={onClose} className="px-4 py-2 rounded-lg border border-gray-200 text-sm" style={{ color: BS_GRAY }}>
+            Cancel
+          </button>
+          <button type="submit" disabled={saving} className="px-4 py-2 rounded-lg text-sm disabled:opacity-50" style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 600 }}>
+            {saving ? "Saving..." : "Save Changes"}
+          </button>
+        </div>
+      </form>
+    </div>;
+}
+
 /**
  * Admin settings page placeholder for account and security preferences.
  */

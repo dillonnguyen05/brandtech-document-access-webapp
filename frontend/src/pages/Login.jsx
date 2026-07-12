@@ -9,6 +9,13 @@ const BS_GOLD = "#F2A900";
 const BS_GRAY = "#565A5C";
 
 /**
+ * Owner accounts use the admin dashboard with extra backend permissions.
+ */
+function isAdminLikeRole(role) {
+  return role === "admin" || role === "owner";
+}
+
+/**
  * Sign-in page for admins and customers.
  * The AuthContext decides the final destination based on the user's Firestore role.
  */
@@ -33,7 +40,7 @@ function Login() {
       // Function from AuthContext.jsx: checks Firebase login and returns the user's role.
       const result = await login(email, password);
       if (result.success) {
-        navigate(result.role === "admin" ? "/admin" : "/dashboard");
+        navigate(isAdminLikeRole(result.role) ? "/admin" : "/dashboard");
       } else {
         setError(result.error || "Login failed.");
       }

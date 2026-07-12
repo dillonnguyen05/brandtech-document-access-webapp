@@ -20,6 +20,15 @@ export async function loadPendingCustomers() {
 }
 
 /**
+ * Loads every user account for the owner-only role management screen.
+ */
+export async function loadAllUsers() {
+  // Function from apiClient.js: checks Firebase sign-in and loads all users from Express.
+  const result = await apiRequest("/api/admin/users/all");
+  return result.users;
+}
+
+/**
  * Sends a shared admin account decision request.
  */
 function reviewCustomer(userId, action, message = "") {
@@ -52,4 +61,24 @@ export function denyCustomer(userId, message) {
  */
 export function revokeCustomer(userId, message) {
   return reviewCustomer(userId, "revoke", message);
+}
+
+/**
+ * Lets the owner grant admin access to an active user.
+ */
+export function makeUserAdmin(userId) {
+  return apiRequest(
+    `/api/admin/users/${encodeURIComponent(userId)}/make-admin`,
+    { method: "POST" }
+  );
+}
+
+/**
+ * Lets the owner remove admin access from an admin user.
+ */
+export function revokeUserAdmin(userId) {
+  return apiRequest(
+    `/api/admin/users/${encodeURIComponent(userId)}/revoke-admin`,
+    { method: "POST" }
+  );
 }

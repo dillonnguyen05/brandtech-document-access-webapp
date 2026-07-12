@@ -18,7 +18,7 @@ const ALLOWED_EXTENSIONS = new Set([
   ".ppt",
   ".pptx"
 ]);
-const ALLOWED_TARGET_TYPES = new Set(["all", "company", "customer"]);
+const ALLOWED_TARGET_TYPES = new Set(["all", "company", "customer", "admin"]);
 
 /**
  * Checks if a file name has a supported document extension.
@@ -249,6 +249,7 @@ async function createOrGetFolder(parentFolderId, rawName, admin, options = {}) {
     createdBy: admin.id,
     createdByName: admin.name,
     createdByEmail: admin.email,
+    ...(options.folderData || {}),
     createdAt: FieldValue.serverTimestamp()
   };
 
@@ -338,8 +339,16 @@ function documentTargetsCustomer(document, customerId, company) {
 /**
  * Checks if a folder access request covers a document in that folder subtree.
  */
-function folderRequestCoversDocument(accessRequest, document) {
+function folderRequestCoversDocument(accessRequest, document, documentId = "") {
   if ((accessRequest.resourceType || "") !== "folder") return false;
+
+  const excludedDocumentIds = Array.isArray(accessRequest.excludedDocumentIds)
+    ? accessRequest.excludedDocumentIds
+    : [];
+
+  if (documentId && excludedDocumentIds.includes(documentId)) {
+    return false;
+  }
 
   const requestFolderPath = accessRequest.folderPath || "";
   const documentFolderPath = document.folderPath || "";
@@ -393,6 +402,17 @@ async function validateTarget(body) {
 
   if (!ALLOWED_TARGET_TYPES.has(targetType)) {
     throw createRouteError(400, "Invalid target audience.");
+  }
+
+  if (targetType === "admin") {
+    return {
+      targetType,
+      targetCustomer: "Admins only",
+      targetCompany: "",
+      targetCustomerId: "",
+      targetCustomerName: "",
+      targetCustomerEmail: ""
+    };
   }
 
   if (targetType === "customer") {
@@ -511,6 +531,13 @@ function adminIdentity(req) {
   };
 }
 
+/**
+ * Treats owner accounts as admin-facing accounts for document APIs.
+ */
+function hasAdminDocumentAccess(profile) {
+  return ["admin", "owner"].includes(profile?.role);
+}
+
 // Lists admin-visible folder metadata for the document browser.
 router.get("/folders", async (req, res) => {
   const snapshot = await adminDb
@@ -526,20 +553,27 @@ router.get("/folders", async (req, res) => {
 // Creates a folder under the selected parent folder.
 router.post("/folders", async (req, res) => {
   const admin = adminIdentity(req);
+  const target = await validateTarget(req.body);
   const parentFolderId = cleanText(req.body.parentFolderId);
   const folder = await createOrGetFolder(
     parentFolderId,
     req.body.name,
     admin,
-    { throwIfExists: true }
+    {
+      throwIfExists: true,
+      folderData: target
+    }
   );
   const auditRef = adminDb.collection("auditLog").doc();
 
   await auditRef.set({
-    customerId: "",
-    customer: "",
-    company: "",
+    customerId: target.targetCustomerId || "",
+    customer: target.targetCustomerName || "",
+    company: target.targetCompany || "",
     documentId: "",
+    folderId: folder.id,
+    folderPath: folder.path || "",
+    resourceType: "folder",
     document: folder.path || folder.name,
     action: "Folder Created",
     adminId: admin.id,
@@ -555,6 +589,204 @@ router.post("/folders", async (req, res) => {
       ...folder,
       createdAt: null
     }
+  });
+});
+
+// Updates folder name/location and optionally applies category/target changes to nested documents.
+router.patch("/folders/:folderId", async (req, res) => {
+  const folderRef = adminDb
+    .collection("documentFolders")
+    .doc(req.params.folderId);
+  const folderSnapshot = await folderRef.get();
+
+  if (!folderSnapshot.exists) {
+    throw createRouteError(404, "Folder not found.");
+  }
+
+  const folder = {
+    id: folderSnapshot.id,
+    ...folderSnapshot.data()
+  };
+  const oldPath = folder.path || folder.name || "";
+  const name = cleanFolderName(req.body.name);
+  const parentFolderId = cleanText(req.body.parentFolderId);
+
+  if (parentFolderId === folder.id) {
+    throw createRouteError(400, "A folder cannot be moved inside itself.");
+  }
+
+  const parentFolder = await loadFolder(parentFolderId);
+
+  if (
+    parentFolder.path
+    && oldPath
+    && (parentFolder.path === oldPath || parentFolder.path.startsWith(`${oldPath}/`))
+  ) {
+    throw createRouteError(400, "A folder cannot be moved into one of its subfolders.");
+  }
+
+  const newPath = [parentFolder.path, name].filter(Boolean).join("/");
+  const newPathKey = newPath.toLowerCase();
+  const conflictingFolderSnapshot = await adminDb
+    .collection("documentFolders")
+    .where("pathKey", "==", newPathKey)
+    .limit(1)
+    .get();
+
+  if (
+    !conflictingFolderSnapshot.empty
+    && conflictingFolderSnapshot.docs[0].id !== folder.id
+  ) {
+    throw createRouteError(409, "A folder with this name already exists here.");
+  }
+
+  const categoryAction = cleanText(req.body.category);
+  const categoryUpdate = categoryAction && categoryAction !== "__keep"
+    ? categoryAction
+    : "";
+  const targetAction = cleanText(req.body.targetType);
+  const targetUpdate = !targetAction || targetAction === "__keep"
+    ? null
+    : await validateTarget(req.body);
+  const admin = adminIdentity(req);
+  const [folderSnapshotAll, documentSnapshot, requestSnapshot] = await Promise.all([
+    adminDb.collection("documentFolders").get(),
+    adminDb.collection("documents").get(),
+    adminDb.collection("accessRequests").get()
+  ]);
+  const affectedFolders = folderSnapshotAll.docs
+    .map((snapshot) => ({
+      ref: snapshot.ref,
+      id: snapshot.id,
+      data: snapshot.data()
+    }))
+    .filter(({ id, data }) => (
+      id === folder.id
+      || (oldPath && (data.path || "").startsWith(`${oldPath}/`))
+    ));
+  const updatedFolderById = new Map();
+
+  affectedFolders.forEach(({ id, data }) => {
+    const currentPath = data.path || "";
+    const suffix = id === folder.id
+      ? ""
+      : currentPath.slice(oldPath.length + 1);
+    const updatedPath = [newPath, suffix].filter(Boolean).join("/");
+    const updatedName = id === folder.id ? name : data.name;
+
+    updatedFolderById.set(id, {
+      ...data,
+      name: updatedName,
+      nameLower: String(updatedName || "").toLowerCase(),
+      parentFolderId: id === folder.id ? parentFolder.id || "" : data.parentFolderId || "",
+      parentPath: updatedPath.split("/").slice(0, -1).join("/"),
+      path: updatedPath,
+      pathKey: updatedPath.toLowerCase(),
+      depth: updatedPath.split("/").filter(Boolean).length
+    });
+  });
+
+  const affectedDocuments = documentSnapshot.docs.filter((snapshot) => {
+    const document = snapshot.data();
+    const documentFolderPath = document.folderPath || "";
+
+    return documentFolderPath === oldPath
+      || (oldPath && documentFolderPath.startsWith(`${oldPath}/`));
+  });
+  const affectedFolderIds = new Set(affectedFolders.map(({ id }) => id));
+  const affectedFolderRequests = requestSnapshot.docs.filter((snapshot) => {
+    const accessRequest = snapshot.data();
+
+    return accessRequest.resourceType === "folder"
+      && affectedFolderIds.has(accessRequest.folderId);
+  });
+  const auditRef = adminDb.collection("auditLog").doc();
+  const batch = adminDb.batch();
+
+  affectedFolders.forEach(({ ref, id }) => {
+    const data = updatedFolderById.get(id);
+
+    batch.update(ref, {
+      name: data.name,
+      nameLower: data.nameLower,
+      parentFolderId: data.parentFolderId,
+      parentPath: data.parentPath,
+      path: data.path,
+      pathKey: data.pathKey,
+      depth: data.depth,
+      updatedAt: FieldValue.serverTimestamp(),
+      updatedBy: admin.id,
+      updatedByName: admin.name
+    });
+  });
+
+  affectedDocuments.forEach((snapshot) => {
+    const document = snapshot.data();
+    const updatedFolder = updatedFolderById.get(document.folderId);
+    const updates = {
+      updatedAt: FieldValue.serverTimestamp(),
+      updatedBy: admin.id,
+      updatedByName: admin.name
+    };
+
+    if (updatedFolder) {
+      updates.folderName = updatedFolder.name;
+      updates.folderPath = updatedFolder.path || "";
+    }
+
+    if (categoryUpdate) {
+      updates.category = categoryUpdate;
+    }
+
+    if (targetUpdate) {
+      Object.assign(updates, targetUpdate);
+    }
+
+    batch.update(snapshot.ref, updates);
+  });
+
+  affectedFolderRequests.forEach((snapshot) => {
+    const accessRequest = snapshot.data();
+    const updatedFolder = updatedFolderById.get(accessRequest.folderId);
+
+    if (!updatedFolder) return;
+
+    batch.update(snapshot.ref, {
+      documentTitle: updatedFolder.path || updatedFolder.name || "Folder",
+      folderName: updatedFolder.name || "Folder",
+      folderPath: updatedFolder.path || "",
+      updatedAt: FieldValue.serverTimestamp()
+    });
+  });
+
+  batch.set(auditRef, {
+    customerId: "",
+    customer: "",
+    company: targetUpdate?.targetCompany || "",
+    documentId: "",
+    folderId: folder.id,
+    folderPath: newPath || "",
+    resourceType: "folder",
+    document: newPath || name,
+    action: "Folder Updated",
+    adminId: admin.id,
+    admin: admin.name,
+    adminEmail: admin.email,
+    requestId: "",
+    createdAt: FieldValue.serverTimestamp()
+  });
+  await batch.commit();
+
+  const updatedFolder = updatedFolderById.get(folder.id);
+
+  res.status(200).json({
+    message: "Folder updated.",
+    folder: {
+      id: folder.id,
+      ...updatedFolder,
+      updatedAt: null
+    },
+    documentsUpdated: affectedDocuments.length
   });
 });
 
@@ -618,6 +850,7 @@ router.post("/", upload.single("file"), async (req, res) => {
       uploadedByName: admin.name,
       uploadedByEmail: admin.email,
       active: true,
+      shareEnabled: true,
       createdAt: FieldValue.serverTimestamp()
     };
     const batch = adminDb.batch();
@@ -628,6 +861,9 @@ router.post("/", upload.single("file"), async (req, res) => {
       customer: "",
       company: target.targetCompany || "",
       documentId: documentRef.id,
+      folderId: folder.id || "",
+      folderPath: folder.path || "",
+      resourceType: "document",
       document: title,
       action: "Document Uploaded",
       adminId: admin.id,
@@ -677,10 +913,21 @@ router.post(
     const bucket = adminStorage.bucket();
     const category = cleanText(req.body.category) || "Uncategorized";
     const relativePaths = bodyValues(req.body.relativePaths);
+    const shareSelectionApplied = cleanText(req.body.shareSelectionApplied) === "true";
+    const sharedFilePaths = new Set(
+      bodyValues(req.body.sharedFilePaths)
+        .map((filePath) => cleanText(filePath).replace(/\\/g, "/"))
+        .filter(Boolean)
+    );
     const folderCache = new Map();
     const uploadedStorageFiles = [];
     const uploadedDocuments = [];
     const skippedFiles = [];
+    let sharedCount = 0;
+
+    if (shareSelectionApplied && sharedFilePaths.size === 0) {
+      throw createRouteError(400, "Select at least one folder item to share.");
+    }
 
     try {
       const batch = adminDb.batch();
@@ -689,6 +936,9 @@ router.post(
         const file = files[index];
         const relativePath = cleanText(relativePaths[index] || file.originalname)
           .replace(/\\/g, "/");
+        const shareEnabled = shareSelectionApplied
+          ? sharedFilePaths.has(relativePath)
+          : true;
 
         if (!isAllowedDocumentFile(file.originalname)) {
           skippedFiles.push({
@@ -737,6 +987,7 @@ router.post(
           uploadedByName: admin.name,
           uploadedByEmail: admin.email,
           active: true,
+          shareEnabled,
           createdAt: FieldValue.serverTimestamp()
         };
 
@@ -746,6 +997,9 @@ router.post(
           customer: "",
           company: target.targetCompany || "",
           documentId: documentRef.id,
+          folderId: folder.id || "",
+          folderPath: folder.path || "",
+          resourceType: "document",
           document: title,
           action: "Document Uploaded",
           adminId: admin.id,
@@ -761,6 +1015,10 @@ router.post(
           storagePath: undefined,
           createdAt: null
         });
+
+        if (shareEnabled) {
+          sharedCount += 1;
+        }
       }
 
       if (uploadedDocuments.length === 0) {
@@ -772,7 +1030,8 @@ router.post(
       res.status(201).json({
         message: "Folder uploaded successfully.",
         documents: uploadedDocuments,
-        skippedFiles
+        skippedFiles,
+        sharedCount
       });
     } catch (error) {
       await Promise.all(
@@ -832,6 +1091,9 @@ router.patch("/:documentId", async (req, res) => {
     customer: "",
     company: target.targetCompany || "",
     documentId: documentRef.id,
+    folderId: folder.id || "",
+    folderPath: folder.path || "",
+    resourceType: "document",
     document: title,
     action: "Document Updated",
     adminId: admin.id,
@@ -898,6 +1160,9 @@ router.delete("/:documentId", async (req, res) => {
     customer: "",
     company: document.targetCompany || "",
     documentId: documentRef.id,
+    folderId: document.folderId || "",
+    folderPath: document.folderPath || "",
+    resourceType: "document",
     document: document.title || document.fileName || "Untitled Document",
     action: "Document Deleted",
     adminId: admin.id,
@@ -916,7 +1181,7 @@ router.delete("/:documentId", async (req, res) => {
 
 // Lists documents/folders the current user can see; admins see all documents.
 documentAccessRouter.get("/", async (req, res) => {
-  if (req.userProfile.role === "admin") {
+  if (hasAdminDocumentAccess(req.userProfile)) {
     const [documentSnapshot, folderSnapshot] = await Promise.all([
       adminDb
         .collection("documents")
@@ -969,11 +1234,12 @@ documentAccessRouter.get("/", async (req, res) => {
     }))
     .filter(({ data }) => (
       data.active !== false
+      && data.shareEnabled !== false
       && documentTargetsCustomer(data, req.auth.uid, company)
     ));
   const approvedDocuments = targetDocuments.filter(({ id, data }) => (
     approvedDocumentIds.has(id)
-    || approvedFolderRequests.some((request) => folderRequestCoversDocument(request, data))
+    || approvedFolderRequests.some((request) => folderRequestCoversDocument(request, data, id))
   ));
   const folders = folderSnapshot.docs
     .map((snapshot) => ({
@@ -1014,7 +1280,11 @@ documentAccessRouter.get("/:documentId/download", async (req, res) => {
     throw createRouteError(409, "This document is no longer active.");
   }
 
-  if (req.userProfile.role !== "admin") {
+  if (!hasAdminDocumentAccess(req.userProfile)) {
+    if (document.shareEnabled === false) {
+      throw createRouteError(403, "This document is not shared with customers.");
+    }
+
     if (!documentTargetsCustomer(
       document,
       req.auth.uid,
@@ -1043,7 +1313,7 @@ documentAccessRouter.get("/:documentId/download", async (req, res) => {
       const approvedFolderRequest = folderRequestSnapshot.docs.find((requestSnapshot) => (
         requestSnapshot.data().status === "approved"
         && requestSnapshot.data().resourceType === "folder"
-        && folderRequestCoversDocument(requestSnapshot.data(), document)
+        && folderRequestCoversDocument(requestSnapshot.data(), document, documentRef.id)
       ));
 
       if (approvedFolderRequest) {

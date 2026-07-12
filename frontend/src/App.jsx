@@ -14,6 +14,20 @@ import AdminDashboard from "./pages/AdminDashboard";
 import CustomerDashboard from "./pages/CustomerDashboard";
 
 /**
+ * Owner uses the admin side of the app but has extra backend permissions.
+ */
+function isAdminLikeRole(role) {
+  return role === "admin" || role === "owner";
+}
+
+/**
+ * Chooses the correct landing page for the signed-in user's role.
+ */
+function dashboardPathForRole(role) {
+  return isAdminLikeRole(role) ? "/admin" : "/dashboard";
+}
+
+/**
  * Keeps authenticated users on the correct side of the app.
  * React Router handles the screen redirect, while Express still enforces API permissions.
  */
@@ -24,8 +38,12 @@ function ProtectedRoute({
   const { user, loading } = useAuth();
   if (loading) return <LoadingScreen />;
   if (!user) return <Navigate to="/login" replace />;
-  if (user.role !== role) {
-    return <Navigate to={user.role === "admin" ? "/admin" : "/dashboard"} replace />;
+  const hasRouteAccess = role === "admin"
+    ? isAdminLikeRole(user.role)
+    : user.role === role;
+
+  if (!hasRouteAccess) {
+    return <Navigate to={dashboardPathForRole(user.role)} replace />;
   }
   return <>{children}</>;
 }
@@ -39,10 +57,10 @@ function AppRoutes() {
   return <Routes>
       <Route
     path="/"
-    element={user ? <Navigate to={user.role === "admin" ? "/admin" : "/dashboard"} replace /> : <Navigate to="/login" replace />}
+    element={user ? <Navigate to={dashboardPathForRole(user.role)} replace /> : <Navigate to="/login" replace />}
   />
-      <Route path="/login" element={user ? <Navigate to={user.role === "admin" ? "/admin" : "/dashboard"} replace /> : <Login />} />
-      <Route path="/register" element={user ? <Navigate to="/dashboard" replace /> : <Register />} />
+      <Route path="/login" element={user ? <Navigate to={dashboardPathForRole(user.role)} replace /> : <Login />} />
+      <Route path="/register" element={user ? <Navigate to={dashboardPathForRole(user.role)} replace /> : <Register />} />
       <Route
     path="/admin"
     element={<ProtectedRoute role="admin">

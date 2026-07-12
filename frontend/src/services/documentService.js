@@ -105,6 +105,14 @@ function formatUploadDate(value) {
  * Builds the admin/customer label that explains who a document targets.
  */
 function formatTargetLabel(data) {
+  if (data.shareEnabled === false) {
+    return "Admin only";
+  }
+
+  if (data.targetType === "admin") {
+    return "Admins only";
+  }
+
   if (data.targetType === "customer") {
     return data.targetCustomerName || data.targetCustomer || "Specific customer";
   }
@@ -192,6 +200,18 @@ export async function uploadFolder(files, documentData, onProgress) {
   }
 
   const { uploadableFiles, skippedFiles } = prepareFolderFiles(fileList);
+  const hasExplicitShareSelection = Array.isArray(documentData.sharedFilePaths);
+  const sharedFilePaths = hasExplicitShareSelection
+    ? documentData.sharedFilePaths
+      .map((filePath) => String(filePath || "").replace(/\\/g, "/").trim())
+      .filter(Boolean)
+    : uploadableFiles.map(fileDisplayName);
+  const uploadableRelativePaths = new Set(uploadableFiles.map((file) => (
+    fileDisplayName(file).replace(/\\/g, "/")
+  )));
+  const sharedUploadablePaths = sharedFilePaths.filter((filePath) => (
+    uploadableRelativePaths.has(filePath)
+  ));
 
   if (uploadableFiles.length === 0) {
     throw new Error(
@@ -201,6 +221,10 @@ export async function uploadFolder(files, documentData, onProgress) {
     );
   }
 
+  if (sharedUploadablePaths.length === 0) {
+    throw new Error("Select at least one supported folder item to share.");
+  }
+
   const formData = new FormData();
 
   formData.append("category", documentData.category || "Uncategorized");
@@ -208,10 +232,15 @@ export async function uploadFolder(files, documentData, onProgress) {
   formData.append("targetCompany", documentData.targetCompany || "");
   formData.append("targetCustomerId", documentData.targetCustomerId || "");
   formData.append("parentFolderId", documentData.parentFolderId || "");
+  formData.append("shareSelectionApplied", hasExplicitShareSelection ? "true" : "false");
+
+  sharedUploadablePaths.forEach((filePath) => {
+    formData.append("sharedFilePaths", filePath);
+  });
 
   uploadableFiles.forEach((file) => {
     formData.append("files", file);
-    formData.append("relativePaths", file.webkitRelativePath || file.name);
+    formData.append("relativePaths", fileDisplayName(file).replace(/\\/g, "/"));
   });
 
   // Function from apiClient.js: uploads folder FormData to Express while reporting progress.
@@ -223,6 +252,7 @@ export async function uploadFolder(files, documentData, onProgress) {
 
   return {
     documents: result.documents.map(formatDocument),
+    sharedCount: result.sharedCount,
     skippedFiles: [
       ...skippedFiles,
       ...(result.skippedFiles || [])
@@ -251,15 +281,34 @@ export async function loadDocumentFolders() {
 /**
  * Creates a folder under the selected parent folder.
  */
-export async function createDocumentFolder(name, parentFolderId = "") {
+export async function createDocumentFolder(name, parentFolderId = "", folderData = {}) {
   // Function from apiClient.js: checks Firebase sign-in and creates a folder through Express.
   const result = await apiRequest("/api/admin/documents/folders", {
     method: "POST",
     body: JSON.stringify({
       name,
-      parentFolderId
+      parentFolderId,
+      targetType: folderData.targetType || "all",
+      targetCompany: folderData.targetCompany || "",
+      targetCustomerId: folderData.targetCustomerId || ""
     })
   });
+
+  return formatFolder(result.folder);
+}
+
+/**
+ * Updates a folder and optionally applies category/target changes to documents inside it.
+ */
+export async function updateDocumentFolder(folderId, folderData) {
+  // Function from apiClient.js: checks Firebase sign-in and updates folder metadata through Express.
+  const result = await apiRequest(
+    `/api/admin/documents/folders/${encodeURIComponent(folderId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(folderData)
+    }
+  );
 
   return formatFolder(result.folder);
 }

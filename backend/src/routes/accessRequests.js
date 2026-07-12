@@ -73,6 +73,18 @@ function getDecisionMessage(req, config) {
 }
 
 /**
+ * Sanitizes document ID arrays before saving folder-level access exclusions.
+ */
+function cleanDocumentIds(value) {
+  if (!Array.isArray(value)) return [];
+
+  return [...new Set(value
+    .map((documentId) => String(documentId || "").trim())
+    .filter(Boolean)
+  )];
+}
+
+/**
  * Converts Firestore Timestamp values into ISO strings for React.
  */
 function timestampToIso(value) {
@@ -141,6 +153,19 @@ function folderContainsDocument(folder, document) {
 }
 
 /**
+ * Checks whether a document sits inside an approved folder request's subtree.
+ */
+function folderRequestContainsDocument(accessRequest, document) {
+  const requestFolderPath = accessRequest.folderPath || "";
+  const documentFolderPath = document.folderPath || "";
+
+  if (!requestFolderPath) return true;
+
+  return documentFolderPath === requestFolderPath
+    || documentFolderPath.startsWith(`${requestFolderPath}/`);
+}
+
+/**
  * Counts active documents in a folder subtree that are assigned to the customer.
  */
 async function countTargetableFolderDocuments(folder, customerId, company) {
@@ -150,6 +175,7 @@ async function countTargetableFolderDocuments(folder, customerId, company) {
     const document = documentSnapshot.data();
 
     return document.active !== false
+      && document.shareEnabled !== false
       && folderContainsDocument(folder, document)
       && documentTargetsCustomer(document, customerId, company);
   }).length;
@@ -298,6 +324,111 @@ router.post("/:requestId/revoke", async (req, res) => {
   });
 });
 
+// Updates which documents are excluded from an approved folder access request.
+router.patch("/:requestId/exclusions", async (req, res) => {
+  const excludedDocumentIds = cleanDocumentIds(req.body.excludedDocumentIds);
+  const requestRef = adminDb
+    .collection("accessRequests")
+    .doc(req.params.requestId);
+  const [requestSnapshot, documentSnapshot] = await Promise.all([
+    requestRef.get(),
+    adminDb.collection("documents").get()
+  ]);
+
+  if (!requestSnapshot.exists) {
+    throw createRouteError(404, "Access request not found.");
+  }
+
+  const accessRequest = requestSnapshot.data();
+  const resourceType = accessRequest.resourceType || (accessRequest.folderId ? "folder" : "document");
+
+  if (resourceType !== "folder") {
+    throw createRouteError(400, "Only folder access can have document exclusions.");
+  }
+
+  if (accessRequest.status !== "approved") {
+    throw createRouteError(409, "Only approved folder access can be changed.");
+  }
+
+  const folderDocumentIds = new Set(documentSnapshot.docs
+    .filter((document) => folderRequestContainsDocument(accessRequest, document.data()))
+    .map((document) => document.id));
+  const validExcludedDocumentIds = excludedDocumentIds.filter((documentId) => (
+    folderDocumentIds.has(documentId)
+  ));
+
+  if (validExcludedDocumentIds.length !== excludedDocumentIds.length) {
+    throw createRouteError(400, "Only documents inside this folder can be unshared.");
+  }
+
+  const admin = adminIdentity(req);
+  const documentTitle = accessRequest.documentTitle
+    || accessRequest.folderName
+    || accessRequest.folderPath
+    || "the folder";
+  const notificationType = validExcludedDocumentIds.length > 0 ? "revoked" : "approved";
+  const notificationMessage = validExcludedDocumentIds.length > 0
+    ? `${validExcludedDocumentIds.length} document(s) were removed from your access to ${documentTitle}.`
+    : `Your access to all shared documents inside ${documentTitle} has been restored.`;
+  const auditMessage = validExcludedDocumentIds.length > 0
+    ? `${validExcludedDocumentIds.length} nested document(s) unshared from this folder access.`
+    : "All nested document exclusions were removed from this folder access.";
+  const notificationRef = adminDb.collection("notifications").doc();
+  const auditRef = adminDb.collection("auditLog").doc();
+  const batch = adminDb.batch();
+
+  batch.update(requestRef, {
+    excludedDocumentIds: validExcludedDocumentIds,
+    excludedDocumentCount: validExcludedDocumentIds.length,
+    reviewedAt: FieldValue.serverTimestamp(),
+    reviewedBy: admin.id,
+    reviewedByName: admin.name,
+    lastAction: "folder-exclusions-updated"
+  });
+
+  batch.set(notificationRef, {
+    recipientId: accessRequest.customerId,
+    recipientName: accessRequest.customerName || "",
+    recipientEmail: accessRequest.customerEmail || "",
+    type: notificationType,
+    message: notificationMessage,
+    resourceType: "folder",
+    documentId: "",
+    folderId: accessRequest.folderId || "",
+    folderPath: accessRequest.folderPath || "",
+    documentTitle,
+    requestId: req.params.requestId,
+    read: false,
+    createdAt: FieldValue.serverTimestamp()
+  });
+
+  batch.set(auditRef, {
+    customerId: accessRequest.customerId,
+    customer: accessRequest.customerName || "",
+    company: accessRequest.company || "",
+    documentId: "",
+    folderId: accessRequest.folderId || "",
+    resourceType: "folder",
+    document: documentTitle,
+    action: "Folder Access Updated",
+    reason: auditMessage,
+    adminId: admin.id,
+    admin: admin.name,
+    adminEmail: admin.email,
+    requestId: req.params.requestId,
+    createdAt: FieldValue.serverTimestamp()
+  });
+
+  await batch.commit();
+
+  const updatedRequestSnapshot = await requestRef.get();
+
+  res.status(200).json({
+    message: "Folder access updated.",
+    request: formatRequestSnapshot(updatedRequestSnapshot)
+  });
+});
+
 // Lists the current customer's request history through Express.
 customerAccessRequestsRouter.get("/", async (req, res) => {
   const snapshot = await adminDb
@@ -427,6 +558,10 @@ customerAccessRequestsRouter.post("/", async (req, res) => {
 
     if (document.active === false) {
       throw createRouteError(409, "This document is no longer active.");
+    }
+
+    if (document.shareEnabled === false) {
+      throw createRouteError(403, "This document is not shared with customers.");
     }
 
     if (!documentTargetsCustomer(document, customerId, customer.company || "")) {

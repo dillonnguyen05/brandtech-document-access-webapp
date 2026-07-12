@@ -4,6 +4,7 @@ import { FieldValue } from "firebase-admin/firestore";
 import { adminAuth, adminDb } from "../firebaseAdmin.js";
 
 const router = express.Router();
+const OWNER_ROLE = "owner";
 
 /**
  * Creates route errors with HTTP status codes for the shared Express error handler.
@@ -97,6 +98,38 @@ function formatCustomerSnapshot(customerSnapshot, authUser) {
     approvedAt: timestampToIso(data.approvedAt),
     deniedAt: timestampToIso(data.deniedAt)
   };
+}
+
+/**
+ * Shapes any user profile for the owner-only role management table.
+ */
+function formatUserSnapshot(userSnapshot, authUser) {
+  const data = userSnapshot.data();
+
+  return {
+    id: userSnapshot.id,
+    ...data,
+    email: authUser?.email || data.email || "",
+    emailVerified: authUser?.emailVerified === true,
+    disabled: authUser?.disabled === true,
+    role: data.role || "customer",
+    status: data.status || "unknown",
+    registrationLocation: formatRegistrationLocation(data.registrationLocation),
+    createdAt: timestampToIso(data.createdAt),
+    approvedAt: timestampToIso(data.approvedAt),
+    deniedAt: timestampToIso(data.deniedAt),
+    revokedAt: timestampToIso(data.revokedAt),
+    roleUpdatedAt: timestampToIso(data.roleUpdatedAt)
+  };
+}
+
+/**
+ * Blocks role-management actions unless the signed-in admin is the owner.
+ */
+function requireOwnerAccess(req) {
+  if (req.userProfile?.role !== OWNER_ROLE || req.userProfile?.status !== "active") {
+    throw createRouteError(403, "Owner access is required.");
+  }
 }
 
 /**
@@ -316,6 +349,98 @@ async function revokeActiveCustomer(req) {
   });
 }
 
+/**
+ * Grants or removes admin privileges for an active non-owner account.
+ */
+async function updateAdminRole(req, nextRole) {
+  requireOwnerAccess(req);
+
+  const { userId } = req.params;
+  const owner = adminIdentity(req);
+  const userRef = adminDb.collection("users").doc(userId);
+  const notificationRef = adminDb.collection("notifications").doc();
+  const auditRef = adminDb.collection("auditLog").doc();
+  const grantingAdmin = nextRole === "admin";
+  let authUser = null;
+
+  try {
+    authUser = await adminAuth.getUser(userId);
+  } catch (error) {
+    if (error.code !== "auth/user-not-found") {
+      throw error;
+    }
+  }
+
+  await adminDb.runTransaction(async (transaction) => {
+    const userSnapshot = await transaction.get(userRef);
+
+    if (!userSnapshot.exists) {
+      throw createRouteError(404, "User account not found.");
+    }
+
+    const targetUser = userSnapshot.data();
+
+    if (targetUser.role === OWNER_ROLE) {
+      throw createRouteError(409, "The owner account cannot be changed here.");
+    }
+
+    if (grantingAdmin) {
+      if (targetUser.role === "admin") {
+        throw createRouteError(409, "This user is already an admin.");
+      }
+
+      if (targetUser.status !== "active") {
+        throw createRouteError(409, "Only active users can be made admin.");
+      }
+    } else if (targetUser.role !== "admin") {
+      throw createRouteError(409, "Only admin users can have admin access revoked.");
+    }
+
+    transaction.update(userRef, {
+      role: nextRole,
+      roleUpdatedAt: FieldValue.serverTimestamp(),
+      roleUpdatedBy: owner.id,
+      roleUpdatedByName: owner.name,
+      adminGrantedAt: grantingAdmin ? FieldValue.serverTimestamp() : null,
+      adminGrantedBy: grantingAdmin ? owner.id : null,
+      adminGrantedByName: grantingAdmin ? owner.name : null,
+      adminRevokedAt: grantingAdmin ? null : FieldValue.serverTimestamp(),
+      adminRevokedBy: grantingAdmin ? null : owner.id,
+      adminRevokedByName: grantingAdmin ? null : owner.name
+    });
+
+    transaction.set(notificationRef, {
+      recipientId: userId,
+      recipientName: targetUser.name || "",
+      recipientEmail: authUser?.email || targetUser.email || "",
+      type: grantingAdmin ? "admin-granted" : "admin-revoked",
+      message: grantingAdmin
+        ? "Your account has been granted admin access."
+        : "Your admin access has been revoked. Your account remains active as a customer.",
+      read: false,
+      createdAt: FieldValue.serverTimestamp()
+    });
+
+    transaction.set(auditRef, {
+      customerId: userId,
+      customer: targetUser.name || "",
+      company: targetUser.company || "",
+      document: "User Role",
+      action: grantingAdmin ? "Admin Granted" : "Admin Revoked",
+      reason: "",
+      adminId: owner.id,
+      admin: owner.name,
+      adminEmail: owner.email,
+      requestId: "",
+      createdAt: FieldValue.serverTimestamp()
+    });
+  });
+
+  const updatedSnapshot = await userRef.get();
+
+  return formatUserSnapshot(updatedSnapshot, authUser);
+}
+
 // Returns the authenticated admin's basic identity for quick frontend checks.
 router.get("/me", (req, res) => {
   res.status(200).json({
@@ -394,6 +519,50 @@ router.get("/active-customers", async (req, res) => {
     ));
 
   res.status(200).json({ users });
+});
+
+// Lists every user profile for the owner-only role management table.
+router.get("/all", async (req, res) => {
+  requireOwnerAccess(req);
+
+  const snapshot = await adminDb.collection("users").get();
+  const authUsers = await loadAuthUsers(
+    snapshot.docs.map((userSnapshot) => userSnapshot.id)
+  );
+  const users = snapshot.docs
+    .map((userSnapshot) => (
+      formatUserSnapshot(userSnapshot, authUsers.get(userSnapshot.id))
+    ))
+    .sort((a, b) => {
+      const roleOrder = { owner: 0, admin: 1, customer: 2 };
+      const roleSort = (roleOrder[a.role] ?? 3) - (roleOrder[b.role] ?? 3);
+
+      return roleSort
+        || (a.name || "").localeCompare(b.name || "")
+        || (a.email || "").localeCompare(b.email || "");
+    });
+
+  res.status(200).json({ users });
+});
+
+// Lets the owner promote an active user to admin.
+router.post("/:userId/make-admin", async (req, res) => {
+  const user = await updateAdminRole(req, "admin");
+
+  res.status(200).json({
+    message: "Admin access granted.",
+    user
+  });
+});
+
+// Lets the owner remove admin privileges without deleting the account.
+router.post("/:userId/revoke-admin", async (req, res) => {
+  const user = await updateAdminRole(req, "customer");
+
+  res.status(200).json({
+    message: "Admin access revoked.",
+    user
+  });
 });
 
 // Marks a pending customer as active after email verification and location checks pass.
