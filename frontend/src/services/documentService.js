@@ -128,6 +128,8 @@ function formatTargetLabel(data) {
  * Normalizes document records returned by Express into the shape the dashboards expect.
  */
 function formatDocument(document) {
+  const accessStatus = document.accessStatus || (document.approved ? "approved" : "");
+
   return {
     ...document,
     title: document.title || document.fileName || "Untitled Document",
@@ -139,6 +141,10 @@ function formatDocument(document) {
     uploadedDate: formatUploadDate(document.createdAt),
     size: formatFileSize(document.fileSize),
     uploadedBy: document.uploadedByName || document.uploadedByEmail || "Admin",
+    accessStatus,
+    approved: accessStatus === "approved" || document.approved === true,
+    canDownload: accessStatus === "approved" || document.canDownload === true,
+    resourceType: "document",
     targetLabel: formatTargetLabel(document)
   };
 }
@@ -153,6 +159,7 @@ function formatFolder(folder) {
     parentFolderId: folder.parentFolderId || "",
     path: folder.path || "",
     depth: folder.depth || 0,
+    resourceType: "folder",
     createdDate: formatUploadDate(folder.createdAt)
   };
 }

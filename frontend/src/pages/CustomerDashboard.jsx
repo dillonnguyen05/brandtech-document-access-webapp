@@ -184,18 +184,20 @@ function CustomerDashboard() {
   const requestableFolders = folders.filter((folder) => !activeFolderRequests.some((request) => (
     folderCoveredByRequest(folder, request)
   )));
-  const approvedDocs = customerDocuments;
-  const approvedFolders = folders.filter((folder) => (
-    approvedDocs.some((document) => folderContainsDocument(folder, document))
+  const approvedDocs = customerDocuments.filter((document) => (
+    document.accessStatus === "approved" || document.approved === true
   ));
-  const documentBreadcrumbs = buildFolderBreadcrumbs(approvedFolders, documentFolderId);
+  const documentFolders = folders.filter((folder) => (
+    customerDocuments.some((document) => folderContainsDocument(folder, document))
+  ));
+  const documentBreadcrumbs = buildFolderBreadcrumbs(documentFolders, documentFolderId);
   const requestBreadcrumbs = buildFolderBreadcrumbs(folders, requestFolderId);
-  const currentDocumentFolder = approvedFolders.find((folder) => folder.id === documentFolderId);
+  const currentDocumentFolder = documentFolders.find((folder) => folder.id === documentFolderId);
   const currentRequestFolder = folders.find((folder) => folder.id === requestFolderId);
-  const visibleApprovedFolders = approvedFolders.filter((folder) => (
+  const visibleDocumentFolders = documentFolders.filter((folder) => (
     folder.parentFolderId === documentFolderId
   ));
-  const visibleApprovedDocs = approvedDocs.filter((document) => (
+  const visibleDocuments = customerDocuments.filter((document) => (
     (document.folderId || "") === documentFolderId
   ));
   const visibleRequestFolders = folders.filter((folder) => (
@@ -210,10 +212,10 @@ function CustomerDashboard() {
     let active = true;
 
     /**
-     * Polls approved documents and requestable folders through Express.
+     * Polls requestable documents, approved documents, and folders through Express.
      */
     const loadLatestDocumentLibrary = () => {
-      // Function from documentService.js: loads approved documents and folders from Express.
+      // Function from documentService.js: loads customer-visible documents and folders from Express.
       loadCustomerDocumentLibrary()
         .then((library) => {
           if (!active) return;
@@ -577,13 +579,16 @@ function CustomerDashboard() {
   />}
           {section === "documents" && <DocumentsSection
     approvedDocs={approvedDocs}
-    visibleApprovedDocs={visibleApprovedDocs}
-    visibleApprovedFolders={visibleApprovedFolders}
+    availableDocumentCount={customerDocuments.length}
+    visibleDocuments={visibleDocuments}
+    visibleDocumentFolders={visibleDocumentFolders}
     documentBreadcrumbs={documentBreadcrumbs}
     currentDocumentFolder={currentDocumentFolder}
     documentFolderId={documentFolderId}
     setDocumentFolderId={setDocumentFolderId}
     documentLoadError={documentLoadError}
+    folderStatus={folderStatus}
+    onRequestAccess={requestAccess}
     onPreviewDocument={setPreviewDocument}
     onDownloadDocument={handleDownloadDocument}
   />}
@@ -808,18 +813,26 @@ function DashboardHome({
  */
 function DocumentsSection({
   approvedDocs,
-  visibleApprovedDocs,
-  visibleApprovedFolders,
+  availableDocumentCount,
+  visibleDocuments,
+  visibleDocumentFolders,
   documentBreadcrumbs,
   currentDocumentFolder,
   documentFolderId,
   setDocumentFolderId,
   documentLoadError,
+  folderStatus,
+  onRequestAccess,
   onPreviewDocument,
   onDownloadDocument
 }) {
   const folderLocationLabel = currentDocumentFolder?.path || "All Documents";
   const parentFolderId = currentDocumentFolder?.parentFolderId || "";
+  const requestButtonLabel = (status) => {
+    if (status === "pending") return "Pending";
+    if (status === "denied" || status === "revoked") return "Request Again";
+    return "Request Access";
+  };
 
   return <div className="bg-white rounded-xl border border-gray-100">
       <div className="px-5 py-4 border-b border-gray-100 flex flex-col gap-3">
@@ -827,7 +840,7 @@ function DocumentsSection({
           <div>
             <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>{folderLocationLabel}</h3>
             <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
-              {approvedDocs.length} approved document{approvedDocs.length !== 1 ? "s" : ""} total
+              {availableDocumentCount} document{availableDocumentCount !== 1 ? "s" : ""} available • {approvedDocs.length} approved
             </p>
           </div>
           {documentFolderId && <button
@@ -861,10 +874,10 @@ function DocumentsSection({
       {documentLoadError && <div className="mx-5 mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
           {documentLoadError}
         </div>}
-      {approvedDocs.length === 0 ? <div className="p-10 text-center">
+      {availableDocumentCount === 0 ? <div className="p-10 text-center">
           <FileText size={32} className="mx-auto mb-3" style={{ color: "#D1D5DB" }} />
-          <p className="text-sm" style={{ color: BS_GRAY }}>No approved documents yet.</p>
-          <p className="text-xs mt-1" style={{ color: "#9CA3AF" }}>Request folder access from the Requests section.</p>
+          <p className="text-sm" style={{ color: BS_GRAY }}>No documents are available yet.</p>
+          <p className="text-xs mt-1" style={{ color: "#9CA3AF" }}>Documents assigned to your company will appear here.</p>
         </div> : <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -875,7 +888,11 @@ function DocumentsSection({
               </tr>
             </thead>
             <tbody>
-              {visibleApprovedFolders.map((folder) => <tr key={`folder-${folder.id}`} style={{ borderBottom: "1px solid #F3F4F6" }}>
+              {visibleDocumentFolders.map((folder) => {
+                const status = folderStatus(folder);
+                const canRequest = status !== "approved" && status !== "pending";
+
+                return <tr key={`folder-${folder.id}`} style={{ borderBottom: "1px solid #F3F4F6" }}>
                   <td className="px-4 py-3.5">
                     <button
     type="button"
@@ -895,20 +912,37 @@ function DocumentsSection({
                   <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>—</td>
                   <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{folder.createdDate}</td>
                   <td className="px-4 py-3.5">
-                    <StatusBadge status="approved" />
+                    {status ? <StatusBadge status={status} /> : <span className="text-xs" style={{ color: BS_GRAY }}>Available</span>}
                   </td>
                   <td className="px-4 py-3.5">
-                    <button
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
     type="button"
     onClick={() => setDocumentFolderId(folder.id)}
     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
     style={{ borderColor: "#D1D5DB", color: BS_GRAY }}
   >
-                      Open <ChevronRight size={11} />
-                    </button>
+                        Open <ChevronRight size={11} />
+                      </button>
+                      <button
+    type="button"
+    onClick={() => onRequestAccess({ ...folder, resourceType: "folder" })}
+    disabled={!canRequest}
+    className="px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80 disabled:opacity-50"
+    style={{ backgroundColor: canRequest ? BS_GOLD : "#E5E7EB", color: canRequest ? BS_BLACK : BS_GRAY, fontWeight: 500 }}
+  >
+                        {status === "approved" ? "Approved" : status === "pending" ? "Pending" : "Request Folder"}
+                      </button>
+                    </div>
                   </td>
-                </tr>)}
-              {visibleApprovedDocs.map((doc, i) => <tr key={doc.id} style={{ borderBottom: i < visibleApprovedDocs.length - 1 ? "1px solid #F3F4F6" : "none" }}>
+                </tr>;
+              })}
+              {visibleDocuments.map((doc, i) => {
+                const status = doc.accessStatus || (doc.approved ? "approved" : "");
+                const canOpen = status === "approved";
+                const canRequest = status !== "approved" && status !== "pending";
+
+                return <tr key={doc.id} style={{ borderBottom: i < visibleDocuments.length - 1 ? "1px solid #F3F4F6" : "none" }}>
                   <td className="px-4 py-3.5">
                     <div className="flex items-center gap-3">
                       <div className="p-1.5 rounded" style={{ backgroundColor: "#F3F4F6" }}>
@@ -925,10 +959,11 @@ function DocumentsSection({
                   <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{doc.type}</td>
                   <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{doc.uploadedDate}</td>
                   <td className="px-4 py-3.5">
-                    <StatusBadge status="approved" />
+                    {status ? <StatusBadge status={status} /> : <span className="text-xs" style={{ color: BS_GRAY }}>Available</span>}
                   </td>
                   <td className="px-4 py-3.5">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {canOpen ? <>
 	                      <button
 	    onClick={() => onPreviewDocument(doc)}
 	    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80"
@@ -944,12 +979,22 @@ function DocumentsSection({
 		  >
 		                        <Download size={11} /> Download
 		                      </button>
+                      </> : <button
+    type="button"
+    onClick={() => onRequestAccess(doc)}
+    disabled={!canRequest}
+    className="px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80 disabled:opacity-50"
+    style={{ backgroundColor: canRequest ? BS_GOLD : "#E5E7EB", color: canRequest ? BS_BLACK : BS_GRAY, fontWeight: 500 }}
+  >
+                        {requestButtonLabel(status)}
+                      </button>}
 		                    </div>
 		                  </td>
-                </tr>)}
-              {visibleApprovedFolders.length === 0 && visibleApprovedDocs.length === 0 && <tr>
+                </tr>;
+              })}
+              {visibleDocumentFolders.length === 0 && visibleDocuments.length === 0 && <tr>
                   <td colSpan={6} className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
-                    No approved documents in this folder.
+                    No documents in this folder.
                   </td>
                 </tr>}
             </tbody>

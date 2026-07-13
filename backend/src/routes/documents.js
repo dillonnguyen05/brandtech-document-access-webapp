@@ -395,6 +395,33 @@ function formatCustomerFolder(folderSnapshot, targetDocuments, approvedDocuments
 }
 
 /**
+ * Finds the strongest customer access state for a document from direct and folder requests.
+ */
+function documentAccessStatus(customerRequests, documentId, document) {
+  const directRequest = customerRequests.find(({ data }) => (
+    (data.resourceType || "document") === "document"
+    && data.documentId === documentId
+  ));
+  const folderRequests = customerRequests.filter(({ data }) => (
+    data.resourceType === "folder"
+    && folderRequestCoversDocument(data, document, documentId)
+  ));
+  const statuses = [
+    directRequest?.data.status,
+    ...folderRequests.map(({ data }) => data.status)
+  ].filter(Boolean);
+
+  if (statuses.includes("approved")) return "approved";
+  if (statuses.includes("pending")) return "pending";
+  if (directRequest?.data.status === "denied") return "denied";
+  if (directRequest?.data.status === "revoked") return "revoked";
+  if (statuses.includes("denied")) return "denied";
+  if (statuses.includes("revoked")) return "revoked";
+
+  return "";
+}
+
+/**
  * Validates who a document is assigned to before creating or updating metadata.
  */
 async function validateTarget(body) {
@@ -1215,8 +1242,12 @@ documentAccessRouter.get("/", async (req, res) => {
       .get()
   ]);
   const company = req.userProfile.company || "";
-  const approvedRequests = requestSnapshot.docs
-    .map((snapshot) => snapshot.data())
+  const customerRequests = requestSnapshot.docs.map((snapshot) => ({
+    id: snapshot.id,
+    data: snapshot.data()
+  }));
+  const approvedRequests = customerRequests
+    .map(({ data }) => data)
     .filter((request) => request.status === "approved");
   const approvedDocumentIds = new Set(
     approvedRequests
@@ -1241,6 +1272,19 @@ documentAccessRouter.get("/", async (req, res) => {
     approvedDocumentIds.has(id)
     || approvedFolderRequests.some((request) => folderRequestCoversDocument(request, data, id))
   ));
+  const visibleDocuments = targetDocuments.map(({ id, data }) => {
+    const accessStatus = documentAccessStatus(customerRequests, id, data);
+
+    return {
+      id,
+      data: {
+        ...data,
+        accessStatus,
+        approved: accessStatus === "approved",
+        canDownload: accessStatus === "approved"
+      }
+    };
+  });
   const folders = folderSnapshot.docs
     .map((snapshot) => ({
       snapshot,
@@ -1257,7 +1301,7 @@ documentAccessRouter.get("/", async (req, res) => {
     ));
 
   res.status(200).json({
-    documents: approvedDocuments.map(({ id, data }) => formatDocumentData(id, data)),
+    documents: visibleDocuments.map(({ id, data }) => formatDocumentData(id, data)),
     folders
   });
 });
