@@ -1612,13 +1612,11 @@ function AdminDashboard() {
   }
         <main className="flex-1 overflow-y-auto p-6">
           {section === "dashboard" && <DashboardContent
-    requests={pendingRequests}
+    requests={requests}
     documents={documents}
     pendingCount={pendingCount}
     approvedCount={approvedCount}
     activeCustomerCount={activeCustomerCount}
-    onApprove={approveRequest}
-    onDeny={denyRequest}
   />}
           {section === "documents" && <DocumentsContent
     documents={documents}
@@ -1807,10 +1805,13 @@ function DashboardContent({
   documents,
   pendingCount,
   approvedCount,
-  activeCustomerCount,
-  onApprove,
-  onDeny
+  activeCustomerCount
 }) {
+  const recentRequests = [...requests]
+    .sort((a, b) => (
+      new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+    ))
+    .slice(0, 5);
   const kpis = [
     { label: "Pending Requests", value: pendingCount, icon: Clock, color: BS_GOLD },
     { label: "Approved Requests", value: approvedCount, icon: CheckCircle, color: "#22C55E" },
@@ -1843,7 +1844,7 @@ function DashboardContent({
         <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
           <div>
             <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Recent Access Requests</h3>
-            <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>Review and manage document access requests</p>
+            <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>Read-only snapshot of customer request activity</p>
           </div>
           {pendingCount > 0 && <span
     className="text-xs px-2.5 py-1 rounded-full"
@@ -1852,15 +1853,69 @@ function DashboardContent({
               {pendingCount} pending
             </span>}
         </div>
-        <RequestsTable
-          requests={requests.slice(0, 5)}
-          documents={documents}
-          onApprove={onApprove}
-          onDeny={onDeny}
-          allowFolderReview={false}
-        />
+        <DashboardRequestsTable requests={recentRequests} />
       </div>
     </div>;
+}
+
+/**
+ * Read-only dashboard table for customer access request status.
+ */
+function DashboardRequestsTable({ requests }) {
+  return <div className="overflow-x-auto">
+    <table className="w-full text-sm">
+      <thead>
+        <tr style={{ backgroundColor: "#FAFAFA" }}>
+          {["Customer", "Company", "Resource", "Date Requested", "Status"].map((heading) => <th
+            key={heading}
+            className="px-4 py-3 text-left text-xs border-b border-gray-100"
+            style={{ color: BS_GRAY, fontWeight: 500 }}
+          >
+            {heading}
+          </th>)}
+        </tr>
+      </thead>
+      <tbody>
+        {requests.map((request, index) => {
+          const isFolder = request.resourceType === "folder";
+          const resourceTitle = request.documentTitle
+            || request.folderPath
+            || request.folderName
+            || (isFolder ? "Folder" : "Document");
+
+          return <tr
+            key={request.id}
+            style={{ borderBottom: index < requests.length - 1 ? "1px solid #F3F4F6" : "none" }}
+          >
+            <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>{request.customerName || "—"}</td>
+            <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{request.company || "—"}</td>
+            <td className="px-4 py-3.5 text-xs max-w-[260px]" style={{ color: BS_BLACK }}>
+              <div className="flex items-center gap-2 min-w-0">
+                {isFolder
+                  ? <Folder size={14} className="shrink-0" style={{ color: BS_GOLD }} />
+                  : <FileText size={14} className="shrink-0" style={{ color: BS_GRAY }} />}
+                <div className="min-w-0">
+                  <p className="truncate" style={{ fontWeight: 600 }}>{resourceTitle}</p>
+                  <p className="text-[11px]" style={{ color: BS_GRAY }}>
+                    {isFolder ? "Folder" : request.documentCategory || "Document"}
+                  </p>
+                </div>
+              </div>
+            </td>
+            <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{request.dateRequested || "—"}</td>
+            <td className="px-4 py-3.5">
+              <StatusBadge status={request.status} />
+            </td>
+          </tr>;
+        })}
+        {requests.length === 0 && <tr>
+          <td colSpan={5} className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
+            No access requests found.
+          </td>
+        </tr>}
+      </tbody>
+    </table>
+  </div>;
 }
 /**
  * Admin document management screen for upload, targeting, preview, edit, and delete.
