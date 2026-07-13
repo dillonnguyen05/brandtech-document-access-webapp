@@ -203,6 +203,9 @@ function CustomerDashboard() {
   const visibleRequestFolders = folders.filter((folder) => (
     folder.parentFolderId === requestFolderId
   ));
+  const visibleRequestDocuments = customerDocuments.filter((document) => (
+    (document.folderId || "") === requestFolderId
+  ));
   const availableFolderPreview = requestableFolders.filter((folder) => (
     !folder.parentFolderId
   ));
@@ -595,6 +598,7 @@ function CustomerDashboard() {
           {section === "requests" && <RequestsSection
     myRequests={myRequests}
     visibleRequestFolders={visibleRequestFolders}
+    visibleRequestDocuments={visibleRequestDocuments}
     requestBreadcrumbs={requestBreadcrumbs}
     currentRequestFolder={currentRequestFolder}
     requestFolderId={requestFolderId}
@@ -1008,6 +1012,7 @@ function DocumentsSection({
 function RequestsSection({
   myRequests,
   visibleRequestFolders,
+  visibleRequestDocuments,
   requestBreadcrumbs,
   currentRequestFolder,
   requestFolderId,
@@ -1019,6 +1024,12 @@ function RequestsSection({
 }) {
   const folderLocationLabel = currentRequestFolder?.path || "All Documents";
   const parentFolderId = currentRequestFolder?.parentFolderId || "";
+  const requestButtonLabel = (status) => {
+    if (status === "pending") return "Pending";
+    if (status === "approved") return "Approved";
+    if (status === "denied" || status === "revoked") return "Request Again";
+    return "Request Document";
+  };
 
   return <div className="space-y-6">
       {
@@ -1030,7 +1041,7 @@ function RequestsSection({
             <div>
               <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>{folderLocationLabel}</h3>
               <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
-                Browse folders and request access by folder scope
+                Browse folders, subfolders, and individual documents to request access
               </p>
             </div>
             {requestFolderId && <button
@@ -1064,14 +1075,14 @@ function RequestsSection({
         {requestActionError && <div className="mx-5 mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
             {requestActionError}
           </div>}
-        {visibleRequestFolders.length === 0 ? <div className="p-8 text-center">
+        {visibleRequestFolders.length === 0 && visibleRequestDocuments.length === 0 ? <div className="p-8 text-center">
             <Folder size={28} className="mx-auto mb-3" style={{ color: "#D1D5DB" }} />
-            <p className="text-sm" style={{ color: BS_GRAY }}>No requestable subfolders here.</p>
+            <p className="text-sm" style={{ color: BS_GRAY }}>No folders or documents are available here.</p>
           </div> : <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr style={{ backgroundColor: "#FAFAFA" }}>
-                  {["Folder", "Documents in Scope", "Status", "Action"].map((h) => <th key={h} className="px-4 py-3 text-left text-xs border-b border-gray-100" style={{ color: BS_GRAY, fontWeight: 500 }}>
+                  {["Item", "Scope", "Status", "Action"].map((h) => <th key={h} className="px-4 py-3 text-left text-xs border-b border-gray-100" style={{ color: BS_GRAY, fontWeight: 500 }}>
                       {h}
                     </th>)}
                 </tr>
@@ -1095,7 +1106,7 @@ function RequestsSection({
                       <p className="text-xs mt-1 ml-7" style={{ color: BS_GRAY }}>{folder.path}</p>
                     </td>
                     <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>
-                      {folder.requestableDocumentCount || 0}
+                      {folder.requestableDocumentCount || 0} document{folder.requestableDocumentCount === 1 ? "" : "s"}
                     </td>
                     <td className="px-4 py-3.5">
                       {status ? <StatusBadge status={status} /> : <span className="text-xs" style={{ color: BS_GRAY }}>Available</span>}
@@ -1119,6 +1130,42 @@ function RequestsSection({
                         {status === "approved" ? "Approved" : status === "pending" ? "Pending" : "Request Folder"}
 	                      </button>
                         </div>
+                    </td>
+                  </tr>;
+                })}
+                {visibleRequestDocuments.map((document, i) => {
+                  const status = document.accessStatus || (document.approved ? "approved" : "");
+                  const canRequest = status !== "approved" && status !== "pending";
+                  const showBorder = i < visibleRequestDocuments.length - 1;
+
+                  return <tr key={document.id} style={{ borderBottom: showBorder ? "1px solid #F3F4F6" : "none" }}>
+                    <td className="px-4 py-3.5">
+                      <div className="flex items-center gap-3">
+                        <FileText size={15} style={{ color: BS_GRAY }} />
+                        <div>
+                          <p className="font-medium" style={{ color: BS_BLACK }}>{document.title}</p>
+                          <p className="text-xs mt-1" style={{ color: BS_GRAY }}>
+                            {document.category} · {document.uploadedDate}
+                          </p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>
+                      Individual document
+                    </td>
+                    <td className="px-4 py-3.5">
+                      {status ? <StatusBadge status={status} /> : <span className="text-xs" style={{ color: BS_GRAY }}>Available</span>}
+                    </td>
+                    <td className="px-4 py-3.5">
+                      <button
+    type="button"
+    onClick={() => onRequestAccess(document)}
+    disabled={!canRequest}
+    className="px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80 disabled:opacity-50"
+    style={{ backgroundColor: canRequest ? BS_GOLD : "#E5E7EB", color: canRequest ? BS_BLACK : BS_GRAY, fontWeight: 500 }}
+  >
+                        {requestButtonLabel(status)}
+                      </button>
                     </td>
                   </tr>;
                 })}
