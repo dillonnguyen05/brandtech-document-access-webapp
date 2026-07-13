@@ -838,13 +838,13 @@ function AdminDashboard() {
   /**
    * Approves a pending document request and refreshes audit history.
    */
-  const approveRequest = async (id) => {
+  const approveRequest = async (id, excludedDocumentIds = []) => {
     const req = requests.find((r) => r.id === id);
     if (!req) return;
     try {
       setRequestLoadError("");
-      // Function from requestService.js: asks Express to approve a document access request.
-      await approveAccessRequest(id);
+      // Function from requestService.js: asks Express to approve a document/folder request.
+      await approveAccessRequest(id, excludedDocumentIds);
       await Promise.all([
         refreshAccessRequests(),
         refreshAuditLog()
@@ -1682,7 +1682,13 @@ function AdminDashboard() {
     onFolderUploadFilesChange={handleFolderUploadFilesChange}
     onUploadFolder={handleFolderUpload}
   />}
-          {section === "requests" && <RequestsContent requests={pendingRequests} error={requestLoadError} onApprove={approveRequest} onDeny={denyRequest} />}
+          {section === "requests" && <RequestsContent
+    requests={pendingRequests}
+    documents={documents}
+    error={requestLoadError}
+    onApprove={approveRequest}
+    onDeny={denyRequest}
+  />}
           {section === "access-management" && <AccessManagementContent
     approvedRequests={activeAccessRequests}
     documents={documents}
@@ -1846,7 +1852,13 @@ function DashboardContent({
               {pendingCount} pending
             </span>}
         </div>
-        <RequestsTable requests={requests.slice(0, 5)} onApprove={onApprove} onDeny={onDeny} />
+        <RequestsTable
+          requests={requests.slice(0, 5)}
+          documents={documents}
+          onApprove={onApprove}
+          onDeny={onDeny}
+          allowFolderReview={false}
+        />
       </div>
     </div>;
 }
@@ -2715,7 +2727,7 @@ function FolderShareFile({ file, depth, selectedPaths, setSelectedPaths }) {
 /**
  * Admin access-request queue wrapper.
  */
-function RequestsContent({ requests, error, onApprove, onDeny }) {
+function RequestsContent({ requests, documents, error, onApprove, onDeny }) {
   return <div className="bg-white rounded-xl border border-gray-100">
       <div className="px-5 py-4 border-b border-gray-100">
         <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Pending Access Requests</h3>
@@ -2724,51 +2736,256 @@ function RequestsContent({ requests, error, onApprove, onDeny }) {
       {error && <div className="mx-5 mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
           {error}
         </div>}
-      <RequestsTable requests={requests} onApprove={onApprove} onDeny={onDeny} />
+      <RequestsTable
+        requests={requests}
+        documents={documents}
+        onApprove={onApprove}
+        onDeny={onDeny}
+        allowFolderReview
+      />
     </div>;
 }
 /**
  * Reusable table for approving or denying pending document access requests.
  */
-function RequestsTable({ requests, onApprove, onDeny }) {
+function RequestsTable({
+  requests,
+  documents = [],
+  onApprove,
+  onDeny,
+  allowFolderReview = true
+}) {
+  const [openRequestId, setOpenRequestId] = useState("");
+  const [excludedDocumentIds, setExcludedDocumentIds] = useState(new Set());
+  const [savingRequestId, setSavingRequestId] = useState("");
+  const [reviewError, setReviewError] = useState("");
+
+  /**
+   * Opens a folder request for file-level approval editing.
+   */
+  const toggleFolderReview = (request) => {
+    if (openRequestId === request.id) {
+      setOpenRequestId("");
+      setExcludedDocumentIds(new Set());
+      setReviewError("");
+      return;
+    }
+
+    setOpenRequestId(request.id);
+    setExcludedDocumentIds(new Set(request.excludedDocumentIds || []));
+    setReviewError("");
+  };
+
+  /**
+   * Checks or unchecks one file from a pending folder request.
+   */
+  const toggleIncludedDocument = (documentId) => {
+    setExcludedDocumentIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+
+      if (nextIds.has(documentId)) {
+        nextIds.delete(documentId);
+      } else {
+        nextIds.add(documentId);
+      }
+
+      return nextIds;
+    });
+  };
+
+  /**
+   * Approves the folder request while saving unchecked files as rejected.
+   */
+  const approveReviewedFolderRequest = async (request, folderDocuments) => {
+    const includedCount = folderDocuments.length - excludedDocumentIds.size;
+
+    if (includedCount <= 0) {
+      setReviewError("Approve at least one file, or deny the folder request.");
+      return;
+    }
+
+    setSavingRequestId(request.id);
+    setReviewError("");
+
+    try {
+      await onApprove(request.id, Array.from(excludedDocumentIds));
+      setOpenRequestId("");
+      setExcludedDocumentIds(new Set());
+    } catch (error) {
+      setReviewError(error.message || "Unable to approve selected files.");
+    } finally {
+      setSavingRequestId("");
+    }
+  };
+
   return <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
           <tr style={{ backgroundColor: "#FAFAFA" }}>
-            {["Customer", "Company", "Document", "Date Requested", "Status", "Action"].map((h) => <th key={h} className="px-4 py-3 text-left text-xs border-b border-gray-100" style={{ color: BS_GRAY, fontWeight: 500 }}>
+            {["Customer", "Company", "Resource", "Date Requested", "Status", "Action"].map((h) => <th key={h} className="px-4 py-3 text-left text-xs border-b border-gray-100" style={{ color: BS_GRAY, fontWeight: 500 }}>
                 {h}
               </th>)}
           </tr>
         </thead>
         <tbody>
-          {requests.map((req, i) => <tr key={req.id} style={{ borderBottom: i < requests.length - 1 ? "1px solid #F3F4F6" : "none" }}>
-              <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>{req.customerName}</td>
-              <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{req.company}</td>
-              <td className="px-4 py-3.5 text-xs max-w-[180px] truncate" style={{ color: BS_BLACK }}>{req.documentTitle}</td>
-              <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{req.dateRequested}</td>
-              <td className="px-4 py-3.5">
-                <StatusBadge status={req.status} />
-              </td>
-              <td className="px-4 py-3.5">
-                {req.status === "pending" && <div className="flex items-center gap-2">
-                    <button
-    onClick={() => onApprove(req.id)}
-    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80"
-    style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 500 }}
-  >
+          {requests.map((req, i) => {
+            const isFolder = req.resourceType === "folder";
+            const isOpen = openRequestId === req.id;
+            const folderDocuments = isFolder
+              ? documents
+                .filter((document) => (
+                  accessRequestContainsDocument(req, document)
+                  && documentTargetsAccessRequest(req, document)
+                ))
+                .sort((a, b) => (
+                  `${a.folderPath || ""}/${a.title || ""}`.localeCompare(`${b.folderPath || ""}/${b.title || ""}`)
+                ))
+              : [];
+            const includedCount = isOpen
+              ? folderDocuments.length - excludedDocumentIds.size
+              : folderDocuments.length;
+            const resourceTitle = req.documentTitle
+              || req.folderPath
+              || req.folderName
+              || (isFolder ? "Folder" : "Document");
+
+            return [
+              <tr key={req.id} style={{ borderBottom: isOpen ? "none" : i < requests.length - 1 ? "1px solid #F3F4F6" : "none" }}>
+                <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>{req.customerName}</td>
+                <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{req.company}</td>
+                <td className="px-4 py-3.5 text-xs max-w-[240px]" style={{ color: BS_BLACK }}>
+                  <div className="flex items-center gap-2 min-w-0">
+                    {isFolder
+                      ? <Folder size={14} className="shrink-0" style={{ color: BS_GOLD }} />
+                      : <FileText size={14} className="shrink-0" style={{ color: BS_GRAY }} />}
+                    <div className="min-w-0">
+                      <p className="truncate" style={{ fontWeight: 600 }}>{resourceTitle}</p>
+                      <p className="text-[11px]" style={{ color: BS_GRAY }}>
+                        {isFolder ? "Folder request" : req.documentCategory || "Document request"}
+                      </p>
+                    </div>
+                  </div>
+                </td>
+                <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{req.dateRequested}</td>
+                <td className="px-4 py-3.5">
+                  <StatusBadge status={req.status} />
+                </td>
+                <td className="px-4 py-3.5">
+                  {req.status === "pending" && <div className="flex flex-wrap items-center gap-2">
+                    {isFolder && allowFolderReview ? <button
+                      type="button"
+                      onClick={() => toggleFolderReview(req)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80 border"
+                      style={{ borderColor: "#D1D5DB", color: BS_BLACK, fontWeight: 500 }}
+                    >
+                      <Eye size={12} /> {isOpen ? "Close" : "Review"}
+                    </button> : <button
+                      type="button"
+                      onClick={() => onApprove(req.id)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80"
+                      style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 500 }}
+                    >
                       <CheckCircle size={12} /> Approve
-                    </button>
+                    </button>}
                     <button
-    onClick={() => onDeny(req)}
-    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80 border"
-    style={{ borderColor: BS_MAROON, color: BS_MAROON }}
-  >
+                      type="button"
+                      onClick={() => onDeny(req)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80 border"
+                      style={{ borderColor: BS_MAROON, color: BS_MAROON }}
+                    >
                       <XCircle size={12} /> Deny
                     </button>
                   </div>}
-                {req.status !== "pending" && <span className="text-xs" style={{ color: "#C4C9CE" }}>—</span>}
-              </td>
-            </tr>)}
+                  {req.status !== "pending" && <span className="text-xs" style={{ color: "#C4C9CE" }}>—</span>}
+                </td>
+              </tr>,
+              isFolder && isOpen && <tr key={`${req.id}-review`}>
+                <td colSpan={6} className="px-4 pb-5" style={{ borderBottom: i < requests.length - 1 ? "1px solid #F3F4F6" : "none" }}>
+                  <div className="rounded-lg border border-gray-100 bg-gray-50 p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-3">
+                      <div>
+                        <h4 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Review Folder Request</h4>
+                        <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
+                          Checked files will be approved. Unchecked files are rejected from this folder access.
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-xs px-2.5 py-1 rounded-full" style={{ backgroundColor: "rgba(242,169,0,0.12)", color: "#A37200", fontWeight: 600 }}>
+                          {includedCount}/{folderDocuments.length} selected
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setExcludedDocumentIds(new Set())}
+                          className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs"
+                          style={{ color: BS_GRAY, fontWeight: 500 }}
+                        >
+                          Include all
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setExcludedDocumentIds(new Set(folderDocuments.map((document) => document.id)))}
+                          className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs"
+                          style={{ color: BS_GRAY, fontWeight: 500 }}
+                        >
+                          Reject all
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => approveReviewedFolderRequest(req, folderDocuments)}
+                          disabled={savingRequestId === req.id || includedCount <= 0}
+                          className="px-3 py-1.5 rounded-lg text-xs disabled:opacity-50"
+                          style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 600 }}
+                        >
+                          {savingRequestId === req.id ? "Approving..." : "Approve Selected"}
+                        </button>
+                      </div>
+                    </div>
+
+                    {reviewError && <div className="mb-3 px-3 py-2 rounded-lg text-xs text-red-700 bg-red-50 border border-red-100">
+                      {reviewError}
+                    </div>}
+
+                    <div className="rounded-lg border border-gray-100 bg-white max-h-80 overflow-y-auto">
+                      {folderDocuments.length === 0 ? <div className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
+                        No requestable files were found inside this folder.
+                      </div> : folderDocuments.map((document, documentIndex) => {
+                        const isExcluded = excludedDocumentIds.has(document.id);
+
+                        return <label
+                          key={document.id}
+                          className="flex items-start gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50"
+                          style={{ borderBottom: documentIndex < folderDocuments.length - 1 ? "1px solid #F3F4F6" : "none" }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={!isExcluded}
+                            onChange={() => toggleIncludedDocument(document.id)}
+                            className="mt-0.5 accent-[#F2A900]"
+                          />
+                          <FileText size={14} className="mt-0.5 shrink-0" style={{ color: isExcluded ? BS_MAROON : BS_GRAY }} />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="text-xs truncate" style={{ color: BS_BLACK, fontWeight: 600 }}>
+                                {document.title}
+                              </p>
+                              {isExcluded ? <span className="text-[11px] px-2 py-0.5 rounded-full" style={{ backgroundColor: "rgba(138,42,43,0.12)", color: BS_MAROON, fontWeight: 600 }}>
+                                Rejected
+                              </span> : <span className="text-[11px] px-2 py-0.5 rounded-full" style={{ backgroundColor: "rgba(34,197,94,0.12)", color: "#166534", fontWeight: 600 }}>
+                                Approved
+                              </span>}
+                            </div>
+                            <p className="text-[11px] mt-0.5 truncate" style={{ color: BS_GRAY }}>
+                              {document.folderPath || "All Documents"} · {document.type} · {document.size}
+                            </p>
+                          </div>
+                        </label>;
+                      })}
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            ].filter(Boolean);
+          })}
           {requests.length === 0 && <tr>
               <td colSpan={6} className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
                 No pending access requests.

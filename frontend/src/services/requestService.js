@@ -95,22 +95,27 @@ export async function loadCustomerRequests() {
 /**
  * Sends a shared admin decision request for approve, deny, grant, or revoke.
  */
-function updateAccessRequest(requestId, action, message = "") {
+function updateAccessRequest(requestId, action, message = "", extraData = {}) {
   // Function from apiClient.js: checks Firebase sign-in and sends the admin request decision to Express.
   return apiRequest(
     `/api/admin/access-requests/${encodeURIComponent(requestId)}/${action}`,
     {
       method: "POST",
-      body: JSON.stringify({ message })
+      body: JSON.stringify({
+        message,
+        ...extraData
+      })
     }
   );
 }
 
 /**
- * Approves a pending document access request.
+ * Approves a pending document or folder access request.
  */
-export function approveAccessRequest(requestId) {
-  return updateAccessRequest(requestId, "approve");
+export function approveAccessRequest(requestId, excludedDocumentIds = []) {
+  return updateAccessRequest(requestId, "approve", "", {
+    excludedDocumentIds
+  });
 }
 
 /**

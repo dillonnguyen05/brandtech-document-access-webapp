@@ -182,6 +182,58 @@ async function countTargetableFolderDocuments(folder, customerId, company) {
 }
 
 /**
+ * Validates selected folder-request exclusions before approval or later edits.
+ */
+async function resolveFolderExclusions(accessRequest, excludedDocumentIds, options = {}) {
+  const { requireIncludedDocument = false } = options;
+  const documentSnapshot = await adminDb.collection("documents").get();
+  const folderDocuments = documentSnapshot.docs.filter((document) => {
+    const data = document.data();
+
+    return data.active !== false
+      && data.shareEnabled !== false
+      && folderRequestContainsDocument(accessRequest, data)
+      && documentTargetsCustomer(
+        data,
+        accessRequest.customerId,
+        accessRequest.company || ""
+      );
+  });
+  const folderDocumentIds = new Set(folderDocuments.map((document) => document.id));
+  const validExcludedDocumentIds = excludedDocumentIds.filter((documentId) => (
+    folderDocumentIds.has(documentId)
+  ));
+
+  if (validExcludedDocumentIds.length !== excludedDocumentIds.length) {
+    throw createRouteError(400, "Only documents inside this folder request can be rejected.");
+  }
+
+  if (requireIncludedDocument && folderDocumentIds.size === 0) {
+    throw createRouteError(
+      409,
+      "This folder no longer contains requestable documents."
+    );
+  }
+
+  if (
+    requireIncludedDocument
+    && validExcludedDocumentIds.length >= folderDocumentIds.size
+  ) {
+    throw createRouteError(
+      400,
+      "Approve at least one document, or deny the folder request instead."
+    );
+  }
+
+  return {
+    excludedDocumentIds: validExcludedDocumentIds,
+    excludedDocumentCount: validExcludedDocumentIds.length,
+    includedDocumentCount: folderDocumentIds.size - validExcludedDocumentIds.length,
+    totalDocumentCount: folderDocumentIds.size
+  };
+}
+
+/**
  * Applies approve, deny, grant, or revoke decisions inside one Firestore transaction.
  */
 async function updateAccessDecision(req, action) {
@@ -192,6 +244,31 @@ async function updateAccessDecision(req, action) {
   const requestRef = adminDb.collection("accessRequests").doc(requestId);
   const notificationRef = adminDb.collection("notifications").doc();
   const auditRef = adminDb.collection("auditLog").doc();
+  const requestedExcludedDocumentIds = cleanDocumentIds(req.body.excludedDocumentIds);
+  const preflightSnapshot = await requestRef.get();
+
+  if (!preflightSnapshot.exists) {
+    throw createRouteError(404, "Access request not found.");
+  }
+
+  const preflightRequest = preflightSnapshot.data();
+  const preflightResourceType = preflightRequest.resourceType
+    || (preflightRequest.folderId ? "folder" : "document");
+
+  if (requestedExcludedDocumentIds.length > 0 && preflightResourceType !== "folder") {
+    throw createRouteError(400, "Only folder requests can reject nested documents.");
+  }
+
+  const folderScope = (
+    preflightResourceType === "folder"
+    && (action === "approve" || action === "grant")
+  )
+    ? await resolveFolderExclusions(
+      preflightRequest,
+      requestedExcludedDocumentIds,
+      { requireIncludedDocument: action === "approve" }
+    )
+    : null;
 
   await adminDb.runTransaction(async (transaction) => {
     const requestSnapshot = await transaction.get(requestRef);
@@ -221,22 +298,37 @@ async function updateAccessDecision(req, action) {
     const documentTitle = accessRequest.documentTitle
       || accessRequest.folderName
       || (resourceType === "folder" ? "the folder" : "the document");
-
-    transaction.update(requestRef, {
+    const partialFolderApproval = folderScope && folderScope.excludedDocumentCount > 0;
+    const notificationMessage = partialFolderApproval
+      ? `Your request for ${documentTitle} was approved for ${folderScope.includedDocumentCount} document(s). ${folderScope.excludedDocumentCount} document(s) were not included.`
+      : config.message(documentTitle, decisionMessage);
+    const auditReason = partialFolderApproval
+      ? `${folderScope.includedDocumentCount} of ${folderScope.totalDocumentCount} nested document(s) approved; ${folderScope.excludedDocumentCount} rejected from folder access.`
+      : decisionMessage;
+    const requestUpdate = {
       status: config.nextStatus,
       reviewedAt: FieldValue.serverTimestamp(),
       reviewedBy: admin.id,
       reviewedByName: admin.name,
       lastAction: action,
       decisionMessage
-    });
+    };
+
+    if (folderScope) {
+      requestUpdate.excludedDocumentIds = folderScope.excludedDocumentIds;
+      requestUpdate.excludedDocumentCount = folderScope.excludedDocumentCount;
+      requestUpdate.approvedDocumentCount = folderScope.includedDocumentCount;
+      requestUpdate.folderDocumentCount = folderScope.totalDocumentCount;
+    }
+
+    transaction.update(requestRef, requestUpdate);
 
     transaction.set(notificationRef, {
       recipientId: accessRequest.customerId,
       recipientName: accessRequest.customerName || "",
       recipientEmail: accessRequest.customerEmail || "",
       type: config.notificationType,
-      message: config.message(documentTitle, decisionMessage),
+      message: notificationMessage,
       resourceType,
       documentId: accessRequest.documentId || "",
       folderId: accessRequest.folderId || "",
@@ -256,7 +348,7 @@ async function updateAccessDecision(req, action) {
       resourceType,
       document: documentTitle,
       action: config.auditAction,
-      reason: decisionMessage,
+      reason: auditReason,
       adminId: admin.id,
       admin: admin.name,
       adminEmail: admin.email,
@@ -330,10 +422,7 @@ router.patch("/:requestId/exclusions", async (req, res) => {
   const requestRef = adminDb
     .collection("accessRequests")
     .doc(req.params.requestId);
-  const [requestSnapshot, documentSnapshot] = await Promise.all([
-    requestRef.get(),
-    adminDb.collection("documents").get()
-  ]);
+  const requestSnapshot = await requestRef.get();
 
   if (!requestSnapshot.exists) {
     throw createRouteError(404, "Access request not found.");
@@ -350,16 +439,8 @@ router.patch("/:requestId/exclusions", async (req, res) => {
     throw createRouteError(409, "Only approved folder access can be changed.");
   }
 
-  const folderDocumentIds = new Set(documentSnapshot.docs
-    .filter((document) => folderRequestContainsDocument(accessRequest, document.data()))
-    .map((document) => document.id));
-  const validExcludedDocumentIds = excludedDocumentIds.filter((documentId) => (
-    folderDocumentIds.has(documentId)
-  ));
-
-  if (validExcludedDocumentIds.length !== excludedDocumentIds.length) {
-    throw createRouteError(400, "Only documents inside this folder can be unshared.");
-  }
+  const folderScope = await resolveFolderExclusions(accessRequest, excludedDocumentIds);
+  const validExcludedDocumentIds = folderScope.excludedDocumentIds;
 
   const admin = adminIdentity(req);
   const documentTitle = accessRequest.documentTitle
