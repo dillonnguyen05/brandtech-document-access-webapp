@@ -565,6 +565,29 @@ function hasAdminDocumentAccess(profile) {
   return ["admin", "owner"].includes(profile?.role);
 }
 
+/**
+ * Commits large sets of Firestore deletes/sets without crossing batch limits.
+ */
+async function commitBatchOperations(operations) {
+  let batch = adminDb.batch();
+  let count = 0;
+
+  for (const operation of operations) {
+    operation(batch);
+    count += 1;
+
+    if (count === 450) {
+      await batch.commit();
+      batch = adminDb.batch();
+      count = 0;
+    }
+  }
+
+  if (count > 0) {
+    await batch.commit();
+  }
+}
+
 // Lists admin-visible folder metadata for the document browser.
 router.get("/folders", async (req, res) => {
   const snapshot = await adminDb
@@ -814,6 +837,116 @@ router.patch("/folders/:folderId", async (req, res) => {
       updatedAt: null
     },
     documentsUpdated: affectedDocuments.length
+  });
+});
+
+// Deletes a folder tree, all nested documents, related requests/notifications, and audits it.
+router.delete("/folders/:folderId", async (req, res) => {
+  const folderRef = adminDb
+    .collection("documentFolders")
+    .doc(req.params.folderId);
+  const folderSnapshot = await folderRef.get();
+
+  if (!folderSnapshot.exists) {
+    throw createRouteError(404, "Folder not found.");
+  }
+
+  const folder = {
+    id: folderSnapshot.id,
+    ...folderSnapshot.data()
+  };
+  const folderPath = folder.path || "";
+
+  if (!folderPath) {
+    throw createRouteError(400, "The root document location cannot be deleted.");
+  }
+
+  const [folderSnapshotAll, documentSnapshot, requestSnapshot, notificationSnapshot] = await Promise.all([
+    adminDb.collection("documentFolders").get(),
+    adminDb.collection("documents").get(),
+    adminDb.collection("accessRequests").get(),
+    adminDb.collection("notifications").get()
+  ]);
+  const affectedFolders = folderSnapshotAll.docs.filter((snapshot) => {
+    const data = snapshot.data();
+    const pathValue = data.path || "";
+
+    return snapshot.id === folder.id
+      || pathValue === folderPath
+      || pathValue.startsWith(`${folderPath}/`);
+  });
+  const affectedFolderIds = new Set(affectedFolders.map((snapshot) => snapshot.id));
+  const affectedDocuments = documentSnapshot.docs.filter((snapshot) => {
+    const document = snapshot.data();
+    const documentFolderPath = document.folderPath || "";
+
+    return affectedFolderIds.has(document.folderId)
+      || documentFolderPath === folderPath
+      || documentFolderPath.startsWith(`${folderPath}/`);
+  });
+  const affectedDocumentIds = new Set(affectedDocuments.map((snapshot) => snapshot.id));
+  const affectedRequests = requestSnapshot.docs.filter((snapshot) => {
+    const accessRequest = snapshot.data();
+    const requestFolderPath = accessRequest.folderPath || "";
+
+    return affectedDocumentIds.has(accessRequest.documentId)
+      || affectedFolderIds.has(accessRequest.folderId)
+      || requestFolderPath === folderPath
+      || requestFolderPath.startsWith(`${folderPath}/`);
+  });
+  const affectedNotifications = notificationSnapshot.docs.filter((snapshot) => {
+    const notification = snapshot.data();
+    const notificationFolderPath = notification.folderPath || "";
+
+    return affectedDocumentIds.has(notification.documentId)
+      || affectedFolderIds.has(notification.folderId)
+      || notificationFolderPath === folderPath
+      || notificationFolderPath.startsWith(`${folderPath}/`);
+  });
+  const storageFiles = affectedDocuments
+    .map((snapshot) => snapshot.data().storagePath)
+    .filter(Boolean)
+    .map((storagePath) => adminStorage.bucket().file(storagePath));
+
+  await Promise.all(storageFiles.map((storageFile) => (
+    storageFile.delete({ ignoreNotFound: true })
+  )));
+
+  const admin = adminIdentity(req);
+  const auditRef = adminDb.collection("auditLog").doc();
+  const operations = [
+    ...affectedDocuments.map((snapshot) => (batch) => batch.delete(snapshot.ref)),
+    ...affectedRequests.map((snapshot) => (batch) => batch.delete(snapshot.ref)),
+    ...affectedNotifications.map((snapshot) => (batch) => batch.delete(snapshot.ref)),
+    ...affectedFolders.map((snapshot) => (batch) => batch.delete(snapshot.ref)),
+    (batch) => batch.set(auditRef, {
+      customerId: "",
+      customer: "",
+      company: folder.targetCompany || "",
+      documentId: "",
+      folderId: folder.id,
+      folderPath,
+      resourceType: "folder",
+      document: folderPath || folder.name || "Folder",
+      action: "Folder Deleted",
+      reason: `${affectedFolders.length} folder(s) and ${affectedDocuments.length} document(s) deleted.`,
+      adminId: admin.id,
+      admin: admin.name,
+      adminEmail: admin.email,
+      requestId: "",
+      createdAt: FieldValue.serverTimestamp()
+    })
+  ];
+
+  await commitBatchOperations(operations);
+
+  res.status(200).json({
+    message: "Folder deleted.",
+    folderId: folder.id,
+    foldersDeleted: affectedFolders.length,
+    documentsDeleted: affectedDocuments.length,
+    requestsDeleted: affectedRequests.length,
+    notificationsDeleted: affectedNotifications.length
   });
 });
 

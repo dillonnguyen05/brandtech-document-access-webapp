@@ -321,6 +321,19 @@ export async function updateDocumentFolder(folderId, folderData) {
 }
 
 /**
+ * Deletes a folder tree, nested documents, related requests, and related notifications through Express.
+ */
+export function deleteDocumentFolder(folderId) {
+  // Function from apiClient.js: checks Firebase sign-in and deletes a folder tree through Express.
+  return apiRequest(
+    `/api/admin/documents/folders/${encodeURIComponent(folderId)}`,
+    {
+      method: "DELETE"
+    }
+  );
+}
+
+/**
  * Loads documents visible to the signed-in customer.
  */
 export async function loadCustomerDocuments() {

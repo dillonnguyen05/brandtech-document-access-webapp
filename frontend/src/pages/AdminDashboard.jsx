@@ -39,6 +39,7 @@ import logo from "../imports/brandtech.jpg";
 import {
   createDocumentFolder,
   deleteDocument,
+  deleteDocumentFolder,
   downloadDocument,
   loadAdminDocuments,
   loadDocumentFolders,
@@ -1193,6 +1194,41 @@ function AdminDashboard() {
   };
 
   /**
+   * Deletes a folder tree plus its nested documents through Express.
+   */
+  const handleDeleteFolder = async (folder) => {
+    const confirmed = window.confirm(
+      `Delete folder "${folder.name}" and everything inside it? This removes subfolders, documents, requests, and notifications.`
+    );
+
+    if (!confirmed) return;
+
+    setFolderActionError("");
+
+    try {
+      // Function from documentService.js: deletes a folder tree and nested documents through Express.
+      await deleteDocumentFolder(folder.id);
+      if (
+        currentFolderId === folder.id
+        || (currentFolder?.path && folder.path && currentFolder.path.startsWith(`${folder.path}/`))
+      ) {
+        setCurrentFolderId(folder.parentFolderId || "");
+      }
+      if (editingFolder?.id === folder.id) {
+        setEditingFolder(null);
+      }
+      await Promise.all([
+        refreshFolders(),
+        refreshDocuments(),
+        refreshAuditLog()
+      ]);
+    } catch (error) {
+      console.error(error);
+      setFolderActionError(error.message || "Unable to delete folder.");
+    }
+  };
+
+  /**
    * Deletes a document plus related requests/notifications through Express.
    */
   const handleDeleteDocument = async (document) => {
@@ -1637,6 +1673,7 @@ function AdminDashboard() {
     onDownloadDocument={handleDownloadDocument}
     onEditDocument={setEditingDocument}
     onEditFolder={setEditingFolder}
+    onDeleteFolder={handleDeleteFolder}
     onDeleteDocument={handleDeleteDocument}
     fileRef={fileRef}
     folderFileRef={folderFileRef}
@@ -1869,6 +1906,7 @@ function DocumentsContent({
   onDownloadDocument,
   onEditDocument,
   onEditFolder,
+  onDeleteFolder,
   onDeleteDocument,
   fileRef,
   folderFileRef,
@@ -2405,6 +2443,16 @@ function DocumentsContent({
     title="Edit folder"
   >
                         <Pencil size={12} />
+                      </button>
+                      <button
+    type="button"
+    onClick={() => onDeleteFolder(folderItem)}
+    className="h-7 w-7 flex items-center justify-center rounded-lg border transition-opacity hover:opacity-80"
+    style={{ borderColor: BS_MAROON, color: BS_MAROON }}
+    aria-label={`Delete ${folderItem.name}`}
+    title="Delete folder"
+  >
+                        <Trash2 size={12} />
                       </button>
                     </div>
                   </td>
