@@ -649,7 +649,7 @@ function AdminDashboard() {
   const activeAccessRequests = requests.filter((request) => request.status === "approved");
   const pendingCount = pendingRequests.length;
   const approvedCount = activeAccessRequests.length;
-  const uniqueCustomers = new Set(requests.map((r) => r.customerId)).size;
+  const activeCustomerCount = activeCustomers.length;
   useEffect(() => {
     let active = true;
 
@@ -1616,7 +1616,7 @@ function AdminDashboard() {
     documents={documents}
     pendingCount={pendingCount}
     approvedCount={approvedCount}
-    uniqueCustomers={uniqueCustomers}
+    activeCustomerCount={activeCustomerCount}
     onApprove={approveRequest}
     onDeny={denyRequest}
   />}
@@ -1801,14 +1801,14 @@ function DashboardContent({
   documents,
   pendingCount,
   approvedCount,
-  uniqueCustomers,
+  activeCustomerCount,
   onApprove,
   onDeny
 }) {
   const kpis = [
     { label: "Pending Requests", value: pendingCount, icon: Clock, color: BS_GOLD },
     { label: "Approved Requests", value: approvedCount, icon: CheckCircle, color: "#22C55E" },
-    { label: "Total Customers", value: uniqueCustomers, icon: Users, color: "#6366F1" },
+    { label: "Total Customers", value: activeCustomerCount, icon: Users, color: "#6366F1" },
     { label: "Active Documents", value: documents.length, icon: Files, color: "#0EA5E9" }
   ];
   return <div className="space-y-6">
