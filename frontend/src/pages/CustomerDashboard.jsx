@@ -18,7 +18,8 @@ import {
   Camera,
   Settings,
   Trash2,
-  Folder
+  Folder,
+  Search
 } from "lucide-react";
 // Function from AuthContext.jsx; checks the current logged-in customer and exposes logout.
 import { useAuth } from "../context/AuthContext";
@@ -75,6 +76,38 @@ const NAV = [
   { key: "profile", label: "Profile", icon: User },
   { key: "settings", label: "Settings", icon: Settings }
 ];
+
+/**
+ * Checks whether any searchable field contains the current search text.
+ */
+function matchesSearch(query, ...values) {
+  const needle = query.trim().toLowerCase();
+
+  if (!needle) return true;
+
+  return values.some((value) => String(value || "").toLowerCase().includes(needle));
+}
+
+/**
+ * Shared compact search input used in customer document lists.
+ */
+function SearchInput({ value, onChange, placeholder }) {
+  return <div className="relative w-full sm:w-80">
+    <Search
+      size={15}
+      className="absolute left-3 top-1/2 -translate-y-1/2"
+      style={{ color: "#9CA3AF" }}
+    />
+    <input
+      type="search"
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      placeholder={placeholder}
+      className="w-full rounded-lg border border-gray-200 bg-gray-50 py-2 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
+      style={{ color: BS_BLACK }}
+    />
+  </div>;
+}
 
 /**
  * Mirrors backend targeting rules so the UI only shows relevant documents.
@@ -830,8 +863,22 @@ function DocumentsSection({
   onPreviewDocument,
   onDownloadDocument
 }) {
+  const [documentSearch, setDocumentSearch] = useState("");
   const folderLocationLabel = currentDocumentFolder?.path || "All Documents";
   const parentFolderId = currentDocumentFolder?.parentFolderId || "";
+  const filteredVisibleDocumentFolders = visibleDocumentFolders.filter((folder) => (
+    matchesSearch(documentSearch, folder.name, folder.path)
+  ));
+  const filteredVisibleDocuments = visibleDocuments.filter((document) => (
+    matchesSearch(
+      documentSearch,
+      document.title,
+      document.fileName,
+      document.category,
+      document.type,
+      document.folderPath
+    )
+  ));
   const requestButtonLabel = (status) => {
     if (status === "pending") return "Pending";
     if (status === "denied" || status === "revoked") return "Request Again";
@@ -844,18 +891,25 @@ function DocumentsSection({
           <div>
             <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>{folderLocationLabel}</h3>
             <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
-              {availableDocumentCount} document{availableDocumentCount !== 1 ? "s" : ""} available • {approvedDocs.length} approved
+              {availableDocumentCount} document{availableDocumentCount !== 1 ? "s" : ""} available • {approvedDocs.length} approved • {filteredVisibleDocuments.length} shown
             </p>
           </div>
-          {documentFolderId && <button
-    type="button"
-    onClick={() => setDocumentFolderId(parentFolderId)}
-    className="inline-flex items-center gap-1.5 self-start sm:self-auto px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
-    style={{ borderColor: "#D1D5DB", color: BS_GRAY, fontWeight: 600 }}
-  >
-              <ArrowLeft size={12} />
-              Back
-            </button>}
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+            <SearchInput
+              value={documentSearch}
+              onChange={setDocumentSearch}
+              placeholder="Search document name..."
+            />
+            {documentFolderId && <button
+      type="button"
+      onClick={() => setDocumentFolderId(parentFolderId)}
+      className="inline-flex items-center gap-1.5 self-start sm:self-auto px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
+      style={{ borderColor: "#D1D5DB", color: BS_GRAY, fontWeight: 600 }}
+    >
+                <ArrowLeft size={12} />
+                Back
+              </button>}
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
           {documentBreadcrumbs.map((breadcrumb, index) => <div key={breadcrumb.id || "root"} className="flex items-center gap-1.5">
@@ -892,7 +946,7 @@ function DocumentsSection({
               </tr>
             </thead>
             <tbody>
-              {visibleDocumentFolders.map((folder) => {
+              {filteredVisibleDocumentFolders.map((folder) => {
                 const status = folderStatus(folder);
                 const canRequest = status !== "approved" && status !== "pending";
 
@@ -941,12 +995,12 @@ function DocumentsSection({
                   </td>
                 </tr>;
               })}
-              {visibleDocuments.map((doc, i) => {
+              {filteredVisibleDocuments.map((doc, i) => {
                 const status = doc.accessStatus || (doc.approved ? "approved" : "");
                 const canOpen = status === "approved";
                 const canRequest = status !== "approved" && status !== "pending";
 
-                return <tr key={doc.id} style={{ borderBottom: i < visibleDocuments.length - 1 ? "1px solid #F3F4F6" : "none" }}>
+                return <tr key={doc.id} style={{ borderBottom: i < filteredVisibleDocuments.length - 1 ? "1px solid #F3F4F6" : "none" }}>
                   <td className="px-4 py-3.5">
                     <div className="flex items-center gap-3">
                       <div className="p-1.5 rounded" style={{ backgroundColor: "#F3F4F6" }}>
@@ -996,9 +1050,9 @@ function DocumentsSection({
 		                  </td>
                 </tr>;
               })}
-              {visibleDocumentFolders.length === 0 && visibleDocuments.length === 0 && <tr>
+              {filteredVisibleDocumentFolders.length === 0 && filteredVisibleDocuments.length === 0 && <tr>
                   <td colSpan={6} className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
-                    No documents in this folder.
+                    {documentSearch.trim() ? "No matching documents in this folder." : "No documents in this folder."}
                   </td>
                 </tr>}
             </tbody>

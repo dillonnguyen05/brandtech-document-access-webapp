@@ -28,7 +28,8 @@ import {
   FolderPlus,
   UploadCloud,
   ArrowLeft,
-  ChevronRight
+  ChevronRight,
+  Search
 } from "lucide-react";
 // Function from AuthContext.jsx; checks the current logged-in admin and exposes logout.
 import { useAuth } from "../context/AuthContext";
@@ -129,6 +130,38 @@ const NAV = [
   { key: "settings", label: "Settings", icon: Settings },
   { key: "profile", label: "Profile", icon: UserCircle }
 ];
+
+/**
+ * Checks whether any searchable field contains the current search text.
+ */
+function matchesSearch(query, ...values) {
+  const needle = query.trim().toLowerCase();
+
+  if (!needle) return true;
+
+  return values.some((value) => String(value || "").toLowerCase().includes(needle));
+}
+
+/**
+ * Shared compact search input used inside admin tables.
+ */
+function SearchInput({ value, onChange, placeholder }) {
+  return <div className="relative w-full sm:w-80">
+    <Search
+      size={15}
+      className="absolute left-3 top-1/2 -translate-y-1/2"
+      style={{ color: "#9CA3AF" }}
+    />
+    <input
+      type="search"
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      placeholder={placeholder}
+      className="w-full rounded-lg border border-gray-200 bg-gray-50 py-2 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
+      style={{ color: BS_BLACK }}
+    />
+  </div>;
+}
 
 /**
  * Formats Firestore/ISO dates for compact table display.
@@ -2013,6 +2046,24 @@ function DocumentsContent({
   const selectedShareFiles = uploadTreeFiles.filter((file) => folderSharePaths.has(file.path));
   const allUploadFilesSelected = uploadTreeFiles.length > 0
     && selectedShareFiles.length === uploadTreeFiles.length;
+  const [documentSearch, setDocumentSearch] = useState("");
+  const filteredVisibleFolders = visibleFolders.filter((folderItem) => (
+    matchesSearch(documentSearch, folderItem.name, folderItem.path, folderItem.createdByName)
+  ));
+  const filteredVisibleDocuments = visibleDocuments.filter((document) => (
+    matchesSearch(
+      documentSearch,
+      document.title,
+      document.fileName,
+      document.category,
+      document.type,
+      document.targetLabel,
+      document.targetCustomer,
+      document.targetCompany,
+      document.uploadedBy,
+      document.folderPath
+    )
+  ));
 
   return <div className="space-y-6">
       {
@@ -2459,10 +2510,16 @@ function DocumentsContent({
           <div>
             <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>{folderLocationLabel}</h3>
             <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
-              {documents.length} total documents · {visibleFolders.length} folders · {visibleDocuments.length} documents here
+              {documents.length} total documents · {filteredVisibleFolders.length} folders · {filteredVisibleDocuments.length} documents shown
             </p>
           </div>
-          {currentFolderId && <button
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <SearchInput
+              value={documentSearch}
+              onChange={setDocumentSearch}
+              placeholder="Search documents..."
+            />
+            {currentFolderId && <button
     type="button"
     onClick={() => setCurrentFolderId(parentFolderId)}
     className="inline-flex items-center gap-1.5 self-start sm:self-auto px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
@@ -2471,6 +2528,7 @@ function DocumentsContent({
               <ArrowLeft size={12} />
               Back
             </button>}
+          </div>
         </div>
         {documentLoadError && <div className="mx-5 mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
             {documentLoadError}
@@ -2488,7 +2546,7 @@ function DocumentsContent({
               </tr>
             </thead>
             <tbody>
-              {visibleFolders.map((folderItem) => <tr key={`folder-${folderItem.id}`} style={{ borderBottom: "1px solid #F3F4F6" }}>
+              {filteredVisibleFolders.map((folderItem) => <tr key={`folder-${folderItem.id}`} style={{ borderBottom: "1px solid #F3F4F6" }}>
                   <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>
                     <button
     type="button"
@@ -2543,7 +2601,7 @@ function DocumentsContent({
                     </div>
                   </td>
                 </tr>)}
-              {visibleDocuments.map((doc, i) => <tr key={doc.id} style={{ borderBottom: i < visibleDocuments.length - 1 ? "1px solid #F3F4F6" : "none" }}>
+              {filteredVisibleDocuments.map((doc, i) => <tr key={doc.id} style={{ borderBottom: i < filteredVisibleDocuments.length - 1 ? "1px solid #F3F4F6" : "none" }}>
                   <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>
                     <span className="inline-flex items-center gap-2">
                       <FileText size={14} style={{ color: BS_GRAY }} />
@@ -2601,9 +2659,9 @@ function DocumentsContent({
 		                    </div>
 	                  </td>
 	                </tr>)}
-              {visibleFolders.length === 0 && visibleDocuments.length === 0 && <tr>
+              {filteredVisibleFolders.length === 0 && filteredVisibleDocuments.length === 0 && <tr>
                   <td colSpan={8} className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
-                    No folders or documents in this location.
+                    {documentSearch.trim() ? "No matching folders or documents." : "No folders or documents in this location."}
                   </td>
                 </tr>}
 	            </tbody>
@@ -2802,20 +2860,37 @@ function FolderShareFile({ file, depth, selectedPaths, setSelectedPaths }) {
  * Admin access-request queue wrapper.
  */
 function RequestsContent({ requests, documents, error, onApprove, onDeny }) {
+  const [requestSearch, setRequestSearch] = useState("");
+  const filteredRequests = requests.filter((request) => (
+    matchesSearch(requestSearch, request.customerName, request.company)
+  ));
+
   return <div className="bg-white rounded-xl border border-gray-100">
-      <div className="px-5 py-4 border-b border-gray-100">
-        <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Pending Access Requests</h3>
-        <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>Approve or deny new customer document and folder requests</p>
+      <div className="px-5 py-4 border-b border-gray-100 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Pending Access Requests</h3>
+          <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
+            Approve or deny new customer document and folder requests · {filteredRequests.length} shown
+          </p>
+        </div>
+        <SearchInput
+          value={requestSearch}
+          onChange={setRequestSearch}
+          placeholder="Search name or company..."
+        />
       </div>
       {error && <div className="mx-5 mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
           {error}
         </div>}
       <RequestsTable
-        requests={requests}
+        requests={filteredRequests}
         documents={documents}
         onApprove={onApprove}
         onDeny={onDeny}
         allowFolderReview
+        emptyMessage={requestSearch.trim()
+          ? "No matching pending access requests."
+          : "No pending access requests."}
       />
     </div>;
 }
@@ -2827,7 +2902,8 @@ function RequestsTable({
   documents = [],
   onApprove,
   onDeny,
-  allowFolderReview = true
+  allowFolderReview = true,
+  emptyMessage = "No pending access requests."
 }) {
   const [openRequestId, setOpenRequestId] = useState("");
   const [excludedDocumentIds, setExcludedDocumentIds] = useState(new Set());
@@ -3062,7 +3138,7 @@ function RequestsTable({
           })}
           {requests.length === 0 && <tr>
               <td colSpan={6} className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
-                No pending access requests.
+                {emptyMessage}
               </td>
             </tr>}
         </tbody>
@@ -3084,6 +3160,19 @@ function AccessManagementContent({
   const [excludedDocumentIds, setExcludedDocumentIds] = useState(new Set());
   const [savingFolderRequestId, setSavingFolderRequestId] = useState("");
   const [folderPanelError, setFolderPanelError] = useState("");
+  const [accessSearch, setAccessSearch] = useState("");
+  const filteredApprovedRequests = approvedRequests.filter((request) => (
+    matchesSearch(
+      accessSearch,
+      request.customerName,
+      request.company,
+      request.documentTitle,
+      request.folderName,
+      request.folderPath,
+      request.resourceType,
+      request.documentCategory
+    )
+  ));
 
   /**
    * Opens or closes a folder request panel and loads its current excluded documents.
@@ -3135,19 +3224,26 @@ function AccessManagementContent({
   };
 
   return <div className="bg-white rounded-xl border border-gray-100">
-    <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+    <div className="px-5 py-4 border-b border-gray-100 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
       <div>
         <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Active Access</h3>
         <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
-          Revoke currently approved access or unshare specific documents inside approved folder access.
+          Revoke currently approved access or unshare specific documents inside approved folder access · {filteredApprovedRequests.length} shown
         </p>
       </div>
-      <span
-        className="text-xs px-2.5 py-1 rounded-full"
-        style={{ backgroundColor: "rgba(34,197,94,0.12)", color: "#166534", fontWeight: 500 }}
-      >
-        {approvedRequests.length} active
-      </span>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <SearchInput
+          value={accessSearch}
+          onChange={setAccessSearch}
+          placeholder="Search name, company, resource..."
+        />
+        <span
+          className="self-start sm:self-auto text-xs px-2.5 py-1 rounded-full"
+          style={{ backgroundColor: "rgba(34,197,94,0.12)", color: "#166534", fontWeight: 500 }}
+        >
+          {approvedRequests.length} active
+        </span>
+      </div>
     </div>
 
     {error && <div className="mx-5 mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
@@ -3168,7 +3264,7 @@ function AccessManagementContent({
           </tr>
         </thead>
         <tbody>
-          {approvedRequests.map((request, index) => {
+          {filteredApprovedRequests.map((request, index) => {
             const isFolder = request.resourceType === "folder";
             const resourceTitle = request.documentTitle
               || request.folderPath
@@ -3195,7 +3291,7 @@ function AccessManagementContent({
             return [
               <tr
                 key={request.id}
-                style={{ borderBottom: isOpen ? "none" : index < approvedRequests.length - 1 ? "1px solid #F3F4F6" : "none" }}
+                style={{ borderBottom: isOpen ? "none" : index < filteredApprovedRequests.length - 1 ? "1px solid #F3F4F6" : "none" }}
               >
                 <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>{request.customerName || "—"}</td>
                 <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{request.company || "—"}</td>
@@ -3262,7 +3358,7 @@ function AccessManagementContent({
                 </td>
               </tr>,
               isFolder && isOpen && <tr key={`${request.id}-documents`}>
-                <td colSpan={7} className="px-4 pb-5" style={{ borderBottom: index < approvedRequests.length - 1 ? "1px solid #F3F4F6" : "none" }}>
+                <td colSpan={7} className="px-4 pb-5" style={{ borderBottom: index < filteredApprovedRequests.length - 1 ? "1px solid #F3F4F6" : "none" }}>
                   <div className="rounded-lg border border-gray-100 bg-gray-50 p-4">
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-3">
                       <div>
@@ -3343,9 +3439,9 @@ function AccessManagementContent({
               </tr>
             ].filter(Boolean);
           })}
-          {approvedRequests.length === 0 && <tr>
+          {filteredApprovedRequests.length === 0 && <tr>
             <td colSpan={7} className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
-              No approved access to manage.
+              {accessSearch.trim() ? "No matching approved access records." : "No approved access to manage."}
             </td>
           </tr>}
         </tbody>
@@ -3368,12 +3464,38 @@ function UserApprovalsContent({
   onDeny,
   onRevoke
 }) {
+  const [userSearch, setUserSearch] = useState("");
+  const filteredPendingUsers = pendingUsers.filter((customer) => (
+    matchesSearch(userSearch, customer.name, customer.company, customer.email, customer.phone)
+  ));
+  const filteredActiveCustomers = activeCustomers.filter((customer) => (
+    matchesSearch(userSearch, customer.name, customer.company, customer.email, customer.phone)
+  ));
+
   return <div className="space-y-6">
+    <div className="bg-white rounded-xl border border-gray-100 px-5 py-4">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Search Customers</h3>
+          <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
+            Search pending approvals and active customers by name, company, email, or phone.
+          </p>
+        </div>
+        <SearchInput
+          value={userSearch}
+          onChange={setUserSearch}
+          placeholder="Search customers..."
+        />
+      </div>
+    </div>
+
     <div className="bg-white rounded-xl border border-gray-100">
       <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
         <div>
           <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Pending User Approvals</h3>
-          <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>Review new customer accounts before they can access the portal</p>
+          <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
+            Review new customer accounts before they can access the portal · {filteredPendingUsers.length} shown
+          </p>
         </div>
         {pendingUsers.length > 0 && <span
     className="text-xs px-2.5 py-1 rounded-full"
@@ -3397,11 +3519,11 @@ function UserApprovalsContent({
             </tr>
           </thead>
           <tbody>
-            {pendingUsers.map((pendingUser, i) => {
+            {filteredPendingUsers.map((pendingUser, i) => {
     const isUpdating = updatingUserId === pendingUser.id;
     const hasLocation = hasRegistrationLocation(pendingUser.registrationLocation);
     const canApprove = pendingUser.emailVerified && hasLocation;
-    return <tr key={pendingUser.id} style={{ borderBottom: i < pendingUsers.length - 1 ? "1px solid #F3F4F6" : "none" }}>
+    return <tr key={pendingUser.id} style={{ borderBottom: i < filteredPendingUsers.length - 1 ? "1px solid #F3F4F6" : "none" }}>
                 <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>{pendingUser.name || "—"}</td>
                 <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{pendingUser.company || "—"}</td>
                 <td className="px-4 py-3.5 text-xs" style={{ color: BS_BLACK }}>{pendingUser.email || "—"}</td>
@@ -3465,9 +3587,9 @@ function UserApprovalsContent({
                 </td>
               </tr>;
   })}
-            {pendingUsers.length === 0 && <tr>
+            {filteredPendingUsers.length === 0 && <tr>
                 <td colSpan={8} className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
-                  No pending customer approvals.
+                  {userSearch.trim() ? "No matching pending customer approvals." : "No pending customer approvals."}
                 </td>
               </tr>}
           </tbody>
@@ -3479,7 +3601,9 @@ function UserApprovalsContent({
       <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
         <div>
           <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Active Customers</h3>
-          <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>Review approved customer accounts and revoke portal access when needed</p>
+          <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
+            Review approved customer accounts and revoke portal access when needed · {filteredActiveCustomers.length} shown
+          </p>
         </div>
         <span
     className="text-xs px-2.5 py-1 rounded-full"
@@ -3507,12 +3631,12 @@ function UserApprovalsContent({
             </tr>
           </thead>
           <tbody>
-            {activeCustomers.map((customer, index) => {
+            {filteredActiveCustomers.map((customer, index) => {
     const isUpdating = updatingUserId === customer.id;
 
     return <tr
       key={customer.id}
-      style={{ borderBottom: index < activeCustomers.length - 1 ? "1px solid #F3F4F6" : "none" }}
+      style={{ borderBottom: index < filteredActiveCustomers.length - 1 ? "1px solid #F3F4F6" : "none" }}
     >
                 <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>{customer.name || "—"}</td>
                 <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{customer.company || "—"}</td>
@@ -3534,9 +3658,9 @@ function UserApprovalsContent({
                 </td>
               </tr>;
   })}
-            {activeCustomers.length === 0 && <tr>
+            {filteredActiveCustomers.length === 0 && <tr>
                 <td colSpan={6} className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
-                  No active customer accounts.
+                  {userSearch.trim() ? "No matching active customer accounts." : "No active customer accounts."}
                 </td>
               </tr>}
           </tbody>
@@ -3557,20 +3681,40 @@ function OwnerUsersContent({
   onMakeAdmin,
   onRevokeAdmin
 }) {
+  const [allUserSearch, setAllUserSearch] = useState("");
+  const filteredUsers = users.filter((account) => (
+    matchesSearch(
+      allUserSearch,
+      account.name,
+      account.email,
+      account.company,
+      account.phone,
+      account.role,
+      account.status
+    )
+  ));
+
   return <div className="bg-white rounded-xl border border-gray-100">
-    <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+    <div className="px-5 py-4 border-b border-gray-100 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
       <div>
         <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>All Users</h3>
         <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
-          Owner-only role management. Assign exactly one owner manually in Firestore.
+          Owner-only role management. Search by name, email, company, phone, role, or status · {filteredUsers.length} shown
         </p>
       </div>
-      <span
-        className="text-xs px-2.5 py-1 rounded-full"
-        style={{ backgroundColor: "rgba(242,169,0,0.12)", color: "#A37200", fontWeight: 500 }}
-      >
-        {users.length} users
-      </span>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <SearchInput
+          value={allUserSearch}
+          onChange={setAllUserSearch}
+          placeholder="Search users..."
+        />
+        <span
+          className="self-start sm:self-auto text-xs px-2.5 py-1 rounded-full"
+          style={{ backgroundColor: "rgba(242,169,0,0.12)", color: "#A37200", fontWeight: 500 }}
+        >
+          {users.length} users
+        </span>
+      </div>
     </div>
 
     {error && <div className="mx-5 mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
@@ -3591,7 +3735,7 @@ function OwnerUsersContent({
           </tr>
         </thead>
         <tbody>
-          {users.map((account, index) => {
+          {filteredUsers.map((account, index) => {
             const isUpdating = updatingUserId === account.id;
             const isOwnerAccount = account.role === "owner";
             const canMakeAdmin = account.role === "customer" && account.status === "active";
@@ -3599,7 +3743,7 @@ function OwnerUsersContent({
 
             return <tr
               key={account.id}
-              style={{ borderBottom: index < users.length - 1 ? "1px solid #F3F4F6" : "none" }}
+              style={{ borderBottom: index < filteredUsers.length - 1 ? "1px solid #F3F4F6" : "none" }}
             >
               <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>{account.name || "—"}</td>
               <td className="px-4 py-3.5 text-xs" style={{ color: BS_BLACK }}>{account.email || "—"}</td>
@@ -3637,9 +3781,9 @@ function OwnerUsersContent({
               </td>
             </tr>;
           })}
-          {users.length === 0 && <tr>
+          {filteredUsers.length === 0 && <tr>
             <td colSpan={8} className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
-              No users found.
+              {allUserSearch.trim() ? "No matching users found." : "No users found."}
             </td>
           </tr>}
         </tbody>
