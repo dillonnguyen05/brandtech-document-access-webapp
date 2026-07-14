@@ -53,6 +53,47 @@ const BS_GOLD = "#F2A900";
 const BS_MAROON = "#8A2A2B";
 const BS_GRAY = "#565A5C";
 const BS_LIGHT = "#F7F8F9";
+const NOTIFICATION_PREFERENCES_STORAGE_KEY = "brandtech.customer.notificationPreferences";
+const DEFAULT_NOTIFICATION_PREFERENCES = {
+  notifyApproval: true,
+  notifyDenial: true,
+  notifyExpiry: true
+};
+
+/**
+ * Loads website-only notification display preferences from this browser.
+ */
+function loadNotificationPreferences() {
+  if (typeof window === "undefined") return DEFAULT_NOTIFICATION_PREFERENCES;
+
+  try {
+    const stored = JSON.parse(
+      window.localStorage.getItem(NOTIFICATION_PREFERENCES_STORAGE_KEY) || "{}"
+    );
+
+    return {
+      ...DEFAULT_NOTIFICATION_PREFERENCES,
+      ...stored
+    };
+  } catch {
+    return DEFAULT_NOTIFICATION_PREFERENCES;
+  }
+}
+
+/**
+ * Checks whether a notification should be visible inside the website based on customer preferences.
+ */
+function notificationMatchesPreferences(notification, preferences) {
+  const type = notification?.type || "";
+
+  if (type === "approved") return preferences.notifyApproval;
+  if (type === "denied" || type === "revoked") return preferences.notifyDenial;
+  if (type === "expired" || type === "expiring" || type === "access-expired" || type === "access-expiring") {
+    return preferences.notifyExpiry;
+  }
+
+  return true;
+}
 
 /**
  * Renders customer-facing status pills for document requests.
@@ -196,6 +237,7 @@ function CustomerDashboard() {
   const [requestFolderId, setRequestFolderId] = useState("");
   const [myRequests, setMyRequests] = useState([]);
   const [notifications, setNotifications] = useState([]);
+  const [notificationPreferences, setNotificationPreferences] = useState(loadNotificationPreferences);
   const [documentLoadError, setDocumentLoadError] = useState("");
   const [requestLoadError, setRequestLoadError] = useState("");
   const [requestActionError, setRequestActionError] = useState("");
@@ -245,10 +287,13 @@ function CustomerDashboard() {
   const visibleRequestDocuments = customerDocuments.filter((document) => (
     (document.folderId || "") === requestFolderId
   ));
+  const visibleNotifications = notifications.filter((notification) => (
+    notificationMatchesPreferences(notification, notificationPreferences)
+  ));
   const availableFolderPreview = requestableFolders.filter((folder) => (
     !folder.parentFolderId
   ));
-  const unreadCount = notifications.filter((n) => !n.read).length;
+  const unreadCount = visibleNotifications.filter((n) => !n.read).length;
 
   useEffect(() => {
     let active = true;
@@ -386,12 +431,16 @@ function CustomerDashboard() {
   const markAllRead = async () => {
     try {
       // Function from notificationService.js: asks Express to mark all notifications as read.
-      await markNotificationsRead(notifications);
+      await markNotificationsRead(visibleNotifications);
+      const visibleNotificationIds = new Set(
+        visibleNotifications.map((notification) => notification.id)
+      );
       setNotifications((currentNotifications) => (
-        currentNotifications.map((notification) => ({
-          ...notification,
-          read: true
-        }))
+        currentNotifications.map((notification) => (
+          visibleNotificationIds.has(notification.id)
+            ? { ...notification, read: true }
+            : notification
+        ))
       ));
       setNotificationLoadError("");
     } catch (error) {
@@ -444,6 +493,25 @@ function CustomerDashboard() {
     } finally {
       setUpdatingNotificationId("");
     }
+  };
+
+  /**
+   * Saves website-only notification preferences in this browser and immediately filters the UI.
+   */
+  const updateNotificationPreference = (key, value) => {
+    setNotificationPreferences((currentPreferences) => {
+      const nextPreferences = {
+        ...currentPreferences,
+        [key]: value
+      };
+
+      window.localStorage.setItem(
+        NOTIFICATION_PREFERENCES_STORAGE_KEY,
+        JSON.stringify(nextPreferences)
+      );
+
+      return nextPreferences;
+    });
   };
 
   /**
@@ -613,7 +681,7 @@ function CustomerDashboard() {
     approvedDocs={approvedDocs}
     myRequests={myRequests}
     availableFolders={availableFolderPreview}
-    notifications={notifications}
+    notifications={visibleNotifications}
     onRequestAccess={requestAccess}
     onPreviewDocument={setPreviewDocument}
     onDownloadDocument={handleDownloadDocument}
@@ -648,7 +716,7 @@ function CustomerDashboard() {
     onRequestAccess={requestAccess}
   />}
           {section === "notifications" && <NotificationsSection
-    notifications={notifications}
+    notifications={visibleNotifications}
     error={notificationLoadError}
     updatingNotificationId={updatingNotificationId}
     onMarkAllRead={markAllRead}
@@ -659,7 +727,11 @@ function CustomerDashboard() {
     user={user}
     onProfileUpdated={refreshUserProfile}
   />}
-          {section === "settings" && <CustomerSettingsContent user={user} />}
+          {section === "settings" && <CustomerSettingsContent
+    user={user}
+    notificationPreferences={notificationPreferences}
+    onNotificationPreferenceChange={updateNotificationPreference}
+  />}
         </div>
       </div>
       <DocumentPreviewModal document={previewDocument} onClose={() => setPreviewDocument(null)} />
@@ -1533,7 +1605,11 @@ function ProfileSection({ user, onProfileUpdated }) {
 /**
  * Customer settings page for security preferences and contact notes.
  */
-function CustomerSettingsContent({ user }) {
+function CustomerSettingsContent({
+  user,
+  notificationPreferences,
+  onNotificationPreferenceChange
+}) {
   const { changePassword } = useAuth();
   const [passwordForm, setPasswordForm] = useState({
     currentPassword: "",
@@ -1543,12 +1619,6 @@ function CustomerSettingsContent({ user }) {
   const [passwordSaving, setPasswordSaving] = useState(false);
   const [passwordError, setPasswordError] = useState("");
   const [passwordMessage, setPasswordMessage] = useState("");
-  const [prefSaved, setPrefSaved] = useState(false);
-  const [defaultDuration, setDefaultDuration] = useState("0");
-  const [autoRenew, setAutoRenew] = useState(true);
-  const [notifyApproval, setNotifyApproval] = useState(true);
-  const [notifyDenial, setNotifyDenial] = useState(true);
-  const [notifyExpiry, setNotifyExpiry] = useState(true);
 
   /**
    * Stores password form changes before Firebase receives the update request.
@@ -1624,7 +1694,7 @@ function CustomerSettingsContent({ user }) {
       </div>
 
       {
-    /* ── Change Password + Access Request Preferences ── */
+    /* ── Change Password + Website Notification Preferences ── */
   }
       <div className="grid grid-cols-2 gap-8">
         {
@@ -1665,83 +1735,40 @@ function CustomerSettingsContent({ user }) {
         </div>
 
         {
-    /* Access Request Preferences */
+    /* Website Notification Preferences */
   }
         <div className="bg-white rounded-xl border border-gray-100 p-8">
-          <h3 className="text-sm mb-1" style={{ color: BS_BLACK, fontWeight: 600 }}>Access Request Preferences</h3>
-          <p className="text-xs mb-5" style={{ color: BS_GRAY }}>Default settings applied when you submit new document access requests.</p>
+          <h3 className="text-sm mb-1" style={{ color: BS_BLACK, fontWeight: 600 }}>Notification Preferences</h3>
+          <p className="text-xs mb-5" style={{ color: BS_GRAY }}>Choose which in-app updates appear inside your Notifications tab.</p>
           <div className="space-y-4">
-            <div>
-              <label className="block text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 500 }}>Preferred Access Duration</label>
-              <select
-    value={defaultDuration}
-    onChange={(e) => setDefaultDuration(e.target.value)}
-    className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
-    style={{ color: BS_BLACK }}
-  >
-                {[["0", "No expiry"], ["7", "7 days"], ["14", "14 days"], ["30", "30 days"], ["60", "60 days"], ["90", "90 days"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-              </select>
-              <p className="text-xs mt-1" style={{ color: BS_GRAY }}>No expiry means access stays active until an admin revokes it.</p>
-            </div>
-            <div>
-              <label className="flex items-center justify-between gap-4 cursor-pointer select-none">
+            {[
+    ["notifyApproval", "Request approved", "Show a website notification when an access request is approved."],
+    ["notifyDenial", "Request denied or revoked", "Show a website notification when an access request is declined or revoked."],
+    ["notifyExpiry", "Access expiring soon", "Show a website notification before document access expires."]
+  ].map(([key, label, desc]) => {
+    const enabled = notificationPreferences[key];
+
+    return <div key={key} className="flex items-center justify-between gap-6">
                 <div>
-                  <p className="text-sm" style={{ color: BS_BLACK }}>Auto-renew requests</p>
-                  <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>Automatically re-submit when access is about to expire.</p>
+                  <p className="text-sm" style={{ color: BS_BLACK }}>{label}</p>
+                  <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>{desc}</p>
                 </div>
                 <button
-    onClick={() => setAutoRenew((p) => !p)}
+    onClick={() => onNotificationPreferenceChange(key, !enabled)}
     className="relative inline-flex h-5 w-9 flex-shrink-0 rounded-full border-2 border-transparent transition-colors duration-200"
-    style={{ backgroundColor: autoRenew ? BS_GOLD : "#D1D5DB" }}
+    style={{ backgroundColor: enabled ? BS_GOLD : "#D1D5DB" }}
   >
                   <span
     className="inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform duration-200"
-    style={{ transform: autoRenew ? "translateX(16px)" : "translateX(0)" }}
+    style={{ transform: enabled ? "translateX(16px)" : "translateX(0)" }}
   />
                 </button>
-              </label>
-            </div>
-            <button
-    onClick={() => {
-      setPrefSaved(true);
-      setTimeout(() => setPrefSaved(false), 2500);
-    }}
-    className="px-5 py-2.5 rounded-lg text-sm transition-opacity hover:opacity-90"
-    style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 600 }}
-  >
-              {prefSaved ? "\u2713 Saved" : "Save Preferences"}
-            </button>
+              </div>;
+  })}
+            <p className="text-xs pt-2" style={{ color: BS_GRAY }}>
+              These settings only affect what appears inside this website. BrandTech does not send email notifications from this portal.
+            </p>
           </div>
-        </div>
-      </div>
-
-      {
-    /* ── Notification Preferences ── */
-  }
-      <div className="bg-white rounded-xl border border-gray-100 p-8 w-full">
-        <h3 className="text-sm mb-1" style={{ color: BS_BLACK, fontWeight: 600 }}>Notification Preferences</h3>
-        <p className="text-xs mb-5" style={{ color: BS_GRAY }}>Choose which events send you an email notification.</p>
-        <div className="space-y-4">
-          {[
-    ["notifyApproval", "Request approved", "Get notified when an access request is approved.", notifyApproval, setNotifyApproval],
-    ["notifyDenial", "Request denied", "Get notified when an access request is declined.", notifyDenial, setNotifyDenial],
-    ["notifyExpiry", "Access expiring soon", "Get notified 7 days before document access expires.", notifyExpiry, setNotifyExpiry]
-  ].map(([key, label, desc, val, setter]) => <div key={key} className="flex items-center justify-between gap-6">
-              <div>
-                <p className="text-sm" style={{ color: BS_BLACK }}>{label}</p>
-                <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>{desc}</p>
-              </div>
-              <button
-    onClick={() => setter(!val)}
-    className="relative inline-flex h-5 w-9 flex-shrink-0 rounded-full border-2 border-transparent transition-colors duration-200"
-    style={{ backgroundColor: val ? BS_GOLD : "#D1D5DB" }}
-  >
-                <span
-    className="inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform duration-200"
-    style={{ transform: val ? "translateX(16px)" : "translateX(0)" }}
-  />
-              </button>
-            </div>)}
         </div>
       </div>
     </div>;
