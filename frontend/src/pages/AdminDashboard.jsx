@@ -650,6 +650,13 @@ function AdminDashboard() {
   const pendingCount = pendingRequests.length;
   const approvedCount = activeAccessRequests.length;
   const activeCustomerCount = activeCustomers.length;
+  const pendingUserApprovalCount = pendingUsers.length;
+  const getMainNavBadge = (key) => {
+    if (key === "requests") return pendingCount;
+    if (key === "users") return pendingUserApprovalCount;
+
+    return void 0;
+  };
   useEffect(() => {
     let active = true;
 
@@ -1433,7 +1440,7 @@ function AdminDashboard() {
       label={label}
       Icon={Icon}
       active={active}
-      badge={key === "requests" && pendingCount > 0 ? pendingCount : key === "users" && pendingUsers.length > 0 ? pendingUsers.length : void 0}
+      badge={getMainNavBadge(key)}
       onClick={() => setSection(key)}
     />;
   })}
@@ -1615,6 +1622,7 @@ function AdminDashboard() {
     requests={requests}
     documents={documents}
     pendingCount={pendingCount}
+    pendingUserApprovalCount={pendingUserApprovalCount}
     approvedCount={approvedCount}
     activeCustomerCount={activeCustomerCount}
   />}
@@ -1767,6 +1775,9 @@ function NavButton({
   badge,
   onClick
 }) {
+  const hasBadge = badge !== void 0;
+  const hasPendingItems = Number(badge) > 0;
+
   return <button
     onClick={onClick}
     className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-all relative group"
@@ -1789,9 +1800,15 @@ function NavButton({
       <span className="text-sm" style={{ fontWeight: active ? 500 : 400 }}>
         {label}
       </span>
-      {badge !== void 0 && <span
+      {hasBadge && <span
     className="ml-auto text-xs rounded-full px-1.5 py-0.5"
-    style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 600, minWidth: "20px", textAlign: "center" }}
+    style={{
+      backgroundColor: hasPendingItems ? BS_GOLD : "rgba(255,255,255,0.08)",
+      color: hasPendingItems ? BS_BLACK : "#7A8490",
+      fontWeight: 600,
+      minWidth: "20px",
+      textAlign: "center"
+    }}
   >
           {badge}
         </span>}
@@ -1804,6 +1821,7 @@ function DashboardContent({
   requests,
   documents,
   pendingCount,
+  pendingUserApprovalCount,
   approvedCount,
   activeCustomerCount
 }) {
@@ -1814,6 +1832,7 @@ function DashboardContent({
     .slice(0, 5);
   const kpis = [
     { label: "Pending Requests", value: pendingCount, icon: Clock, color: BS_GOLD },
+    { label: "User Approvals", value: pendingUserApprovalCount, icon: Users, color: BS_GOLD },
     { label: "Approved Requests", value: approvedCount, icon: CheckCircle, color: "#22C55E" },
     { label: "Total Customers", value: activeCustomerCount, icon: Users, color: "#6366F1" },
     { label: "Active Documents", value: documents.length, icon: Files, color: "#0EA5E9" }
@@ -1822,7 +1841,7 @@ function DashboardContent({
       {
     /* KPI row */
   }
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 xl:grid-cols-5 gap-4">
         {kpis.map(({ label, value, icon: Icon, color }) => <div
     key={label}
     className="bg-white rounded-xl border border-gray-100 p-5"
