@@ -427,9 +427,14 @@ function CustomerDashboard() {
 
     return "";
   };
-  const requestableFolders = folders.filter((folder) => !folderRequests.some((request) => (
-    folderRequestBlocksFolder(folder, request)
-  )));
+  const folderCanStillRequestAccess = (folder) => {
+    const countStatus = folderAccessCountStatus(folder);
+
+    if (countStatus === "approved") return false;
+
+    return Number(folder.requestableDocumentCount || 0) > 0;
+  };
+  const requestableFolders = folders.filter(folderCanStillRequestAccess);
   const approvedDocs = customerDocuments.filter((document) => (
     document.accessStatus === "approved" || document.approved === true
   ));
@@ -452,9 +457,11 @@ function CustomerDashboard() {
   ));
   const visibleRequestFolders = folders.filter((folder) => (
     folder.parentFolderId === requestFolderId
+    && folderCanStillRequestAccess(folder)
   ));
   const visibleRequestDocuments = customerDocuments.filter((document) => (
     (document.folderId || "") === requestFolderId
+    && !documentIsApprovedForCustomer(document)
   ));
   const visibleNotifications = notifications.filter((notification) => (
     notificationMatchesPreferences(notification, notificationPreferences)
