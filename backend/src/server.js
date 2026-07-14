@@ -163,6 +163,12 @@ app.use((error, req, res, next) => {
   }
 
   if (error.code === "LIMIT_FILE_SIZE") {
+    if (req.originalUrl.includes("/profile-photo")) {
+      return res.status(413).json({
+        error: "Profile photo must be 2 MB or smaller."
+      });
+    }
+
     return res.status(413).json({
       error: "File must be 50 MB or smaller."
     });

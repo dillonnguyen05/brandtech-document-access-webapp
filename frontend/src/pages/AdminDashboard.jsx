@@ -75,6 +75,11 @@ import {
   loadAccessRequestDefaults,
   saveAccessRequestDefaults
 } from "../services/settingsService.js";
+// Functions from profileService.js; save/remove the current user's avatar through Express.
+import {
+  removeProfilePhoto,
+  uploadProfilePhoto
+} from "../services/profileService.js";
 const BS_BLACK = "#101820";
 const BS_GOLD = "#F2A900";
 const BS_MAROON = "#8A2A2B";
@@ -488,12 +493,17 @@ function uploadFolderSelectionStats(node, selectedPaths) {
  * Main admin shell that loads Express/Firebase data and routes between dashboard sections.
  */
 function AdminDashboard() {
-  const { user, logout } = useAuth();
+  const { user, logout, refreshUserProfile } = useAuth();
   const navigate = useNavigate();
   const [section, setSection] = useState("dashboard");
   const [profileOpen, setProfileOpen] = useState(false);
   const [profilePic, setProfilePic] = useState(null);
   const dropdownRef = useRef(null);
+
+  useEffect(() => {
+    setProfilePic(user?.profilePhotoUrl || null);
+  }, [user?.profilePhotoUrl]);
+
   useEffect(() => {
     /**
      * Closes the profile menu when the admin clicks outside it.
@@ -1547,9 +1557,9 @@ function AdminDashboard() {
   >
                 <div
     className="h-7 w-7 rounded-full flex items-center justify-center text-xs flex-shrink-0"
-    style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 700 }}
+    style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 700, overflow: "hidden" }}
   >
-                  {user?.name?.charAt(0) || "A"}
+                  {profilePic ? <img src={profilePic} alt="avatar" className="w-full h-full object-cover" /> : user?.name?.charAt(0) || "A"}
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-xs text-white truncate" style={{ fontWeight: 500 }}>{user?.name}</p>
@@ -1765,7 +1775,12 @@ function AdminDashboard() {
     error={auditLoadError}
   />}
           {section === "settings" && <SettingsContent user={user} />}
-          {section === "profile" && <AdminProfileContent user={user} profilePic={profilePic} setProfilePic={setProfilePic} />}
+          {section === "profile" && <AdminProfileContent
+    user={user}
+    profilePic={profilePic}
+    setProfilePic={setProfilePic}
+    onProfileUpdated={refreshUserProfile}
+  />}
         </main>
       </div>
       <DocumentPreviewModal document={previewDocument} onClose={() => setPreviewDocument(null)} />
@@ -4718,35 +4733,80 @@ function SettingsContent({ user }) {
 function AdminProfileContent({
   user,
   profilePic,
-  setProfilePic
+  setProfilePic,
+  onProfileUpdated
 }) {
   const picRef = useRef(null);
-  const [name, setName] = useState(user?.name || "");
-  const [email, setEmail] = useState(user?.email || "");
-  const [saved, setSaved] = useState(false);
+  const [photoSaving, setPhotoSaving] = useState(false);
+  const [photoError, setPhotoError] = useState("");
+  const [photoMessage, setPhotoMessage] = useState("");
+  const roleLabel = user?.role === "owner" ? "Owner" : "Administrator";
+  const profileFields = [
+    ["Full Name", user?.name || "—"],
+    ["Email Address", user?.email || "—"],
+    ["Company", user?.company || "—"],
+    ["Role", roleLabel]
+  ];
 
   /**
-   * Reads the selected profile image locally for an immediate avatar preview.
+   * Function from profileService.js; uploads the selected image through Express and refreshes AuthContext.
    */
-  const handlePicChange = (e) => {
+  const handlePicChange = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => setProfilePic(ev.target?.result);
-    reader.readAsDataURL(file);
+
+    const previousPhoto = profilePic;
+    const previewUrl = URL.createObjectURL(file);
+
+    setProfilePic(previewUrl);
+    setPhotoSaving(true);
+    setPhotoError("");
+    setPhotoMessage("");
+
+    try {
+      const updatedUser = await uploadProfilePhoto(file);
+      setProfilePic(updatedUser.profilePhotoUrl || null);
+      await onProfileUpdated?.();
+      setPhotoMessage("Profile photo saved.");
+    } catch (error) {
+      console.error(error);
+      setProfilePic(previousPhoto);
+      setPhotoError(error.message || "Unable to save profile photo.");
+    } finally {
+      URL.revokeObjectURL(previewUrl);
+      e.target.value = "";
+      setPhotoSaving(false);
+    }
   };
 
   /**
-   * Shows a temporary saved state for the local profile form.
+   * Function from profileService.js; deletes the saved avatar through Express and refreshes AuthContext.
    */
-  const handleSave = () => {
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2500);
+  const handleRemovePhoto = async () => {
+    const previousPhoto = profilePic;
+
+    setPhotoSaving(true);
+    setPhotoError("");
+    setPhotoMessage("");
+
+    try {
+      const updatedUser = await removeProfilePhoto();
+      setProfilePic(updatedUser.profilePhotoUrl || null);
+      await onProfileUpdated?.();
+      setPhotoMessage("Profile photo removed.");
+    } catch (error) {
+      console.error(error);
+      setProfilePic(previousPhoto);
+      setPhotoError(error.message || "Unable to remove profile photo.");
+    } finally {
+      setPhotoSaving(false);
+    }
   };
+
   return <div className="w-full space-y-6">
       <div>
         <h2 className="text-base" style={{ color: BS_BLACK, fontWeight: 600 }}>My Profile</h2>
-        <p className="text-sm mt-0.5" style={{ color: BS_GRAY }}>Manage your personal information and avatar.</p>
+        <p className="text-sm mt-0.5" style={{ color: BS_GRAY }}>Review your account information and manage your avatar.</p>
       </div>
 
       {
@@ -4764,6 +4824,7 @@ function AdminProfileContent({
             </div>
             <button
     onClick={() => picRef.current?.click()}
+    disabled={photoSaving}
     className="absolute bottom-0 right-0 h-7 w-7 rounded-full flex items-center justify-center shadow-md hover:opacity-80 transition-opacity"
     style={{ backgroundColor: BS_BLACK }}
   >
@@ -4773,23 +4834,27 @@ function AdminProfileContent({
           </div>
           <div>
             <p className="text-sm" style={{ color: BS_BLACK, fontWeight: 500 }}>{user?.name}</p>
-            <p className="text-xs mt-0.5 mb-3" style={{ color: BS_GRAY }}>Administrator</p>
+            <p className="text-xs mt-0.5 mb-3" style={{ color: BS_GRAY }}>{roleLabel}</p>
             <div className="flex gap-2">
               <button
     onClick={() => picRef.current?.click()}
-    className="px-4 py-2 rounded-lg text-xs hover:opacity-90 transition-opacity"
+    disabled={photoSaving}
+    className="px-4 py-2 rounded-lg text-xs hover:opacity-90 transition-opacity disabled:opacity-50"
     style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 600 }}
   >
-                Upload Photo
+                {photoSaving ? "Saving..." : "Upload Photo"}
               </button>
               {profilePic && <button
-    onClick={() => setProfilePic(null)}
-    className="px-4 py-2 rounded-lg text-xs border hover:opacity-80 transition-opacity"
+    onClick={handleRemovePhoto}
+    disabled={photoSaving}
+    className="px-4 py-2 rounded-lg text-xs border hover:opacity-80 transition-opacity disabled:opacity-50"
     style={{ borderColor: "#E5E7EB", color: BS_GRAY }}
   >
                   Remove
                 </button>}
             </div>
+            {photoError && <p className="text-xs mt-3 text-red-700">{photoError}</p>}
+            {photoMessage && <p className="text-xs mt-3 text-green-700">{photoMessage}</p>}
           </div>
         </div>
       </div>
@@ -4800,55 +4865,24 @@ function AdminProfileContent({
       <div className="bg-white rounded-xl border border-gray-100 p-8">
         <h3 className="text-sm mb-5" style={{ color: BS_BLACK, fontWeight: 600 }}>Personal Information</h3>
         <div className="grid grid-cols-2 gap-5">
-          <div>
-            <label className="block text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 500 }}>Full Name</label>
-            <input
-    type="text"
-    value={name}
-    onChange={(e) => setName(e.target.value)}
-    className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
-    style={{ color: BS_BLACK }}
-  />
-          </div>
-          <div>
-            <label className="block text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 500 }}>Email Address</label>
-            <input
-    type="email"
-    value={email}
-    onChange={(e) => setEmail(e.target.value)}
-    className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
-    style={{ color: BS_BLACK }}
-  />
-          </div>
-          <div>
-            <label className="block text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 500 }}>Role</label>
-            <input
-    type="text"
-    value="Administrator"
-    readOnly
-    className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm"
-    style={{ color: BS_GRAY }}
-  />
-          </div>
-          <div>
-            <label className="block text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 500 }}>Department</label>
-            <input
-    type="text"
-    defaultValue="Document Management"
-    className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
-    style={{ color: BS_BLACK }}
-  />
-          </div>
-        </div>
-        <div className="mt-5 flex items-center gap-3">
-          <button
-    onClick={handleSave}
-    className="px-5 py-2.5 rounded-lg text-sm hover:opacity-90 transition-opacity"
-    style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 600 }}
+          {profileFields.map(([label, value]) => <div key={label}>
+              <p className="block text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 500 }}>{label}</p>
+              <div
+    className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm min-h-[42px] flex items-center"
+    style={{ color: label === "Role" ? BS_GRAY : BS_BLACK }}
   >
-            Save Changes
-          </button>
-          {saved && <span className="text-xs" style={{ color: "#22C55E" }}>Changes saved successfully.</span>}
+                {value}
+              </div>
+            </div>)}
+        </div>
+        <div
+    className="mt-5 rounded-lg border px-4 py-3"
+    style={{ backgroundColor: "rgba(242,169,0,0.08)", borderColor: "rgba(242,169,0,0.24)" }}
+  >
+          <p className="text-xs" style={{ color: "#A37200", fontWeight: 600 }}>Notes</p>
+          <p className="text-sm mt-1" style={{ color: BS_GRAY }}>
+            Profile details are read-only. Contact BrandTech for changes to your name, company, email, or role.
+          </p>
         </div>
       </div>
 

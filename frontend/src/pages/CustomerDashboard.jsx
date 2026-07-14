@@ -42,6 +42,11 @@ import {
   markNotificationRead,
   markNotificationsRead
 } from "../services/notificationService.js";
+// Functions from profileService.js; save/remove the current user's avatar through Express.
+import {
+  removeProfilePhoto,
+  uploadProfilePhoto
+} from "../services/profileService.js";
 import logo from "../imports/brandtech.jpg";
 const BS_BLACK = "#101820";
 const BS_GOLD = "#F2A900";
@@ -182,7 +187,7 @@ function buildFolderBreadcrumbs(folders, currentFolderId) {
  * Main customer shell that loads documents, requests, notifications, and route sections.
  */
 function CustomerDashboard() {
-  const { user, logout } = useAuth();
+  const { user, logout, refreshUserProfile } = useAuth();
   const navigate = useNavigate();
   const [section, setSection] = useState("dashboard");
   const [documents, setDocuments] = useState([]);
@@ -545,9 +550,9 @@ function CustomerDashboard() {
   >
                 <div
     className="h-7 w-7 rounded-full flex items-center justify-center text-xs flex-shrink-0"
-    style={{ backgroundColor: "rgba(242,169,0,0.2)", color: BS_GOLD, fontWeight: 700 }}
+    style={{ backgroundColor: "rgba(242,169,0,0.2)", color: BS_GOLD, fontWeight: 700, overflow: "hidden" }}
   >
-                  {user?.name?.charAt(0) || "C"}
+                  {user?.profilePhotoUrl ? <img src={user.profilePhotoUrl} alt="avatar" className="w-full h-full object-cover" /> : user?.name?.charAt(0) || "C"}
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-xs text-white truncate" style={{ fontWeight: 500 }}>{user?.name}</p>
@@ -650,7 +655,10 @@ function CustomerDashboard() {
     onMarkRead={markOneRead}
     onDismiss={dismissOneNotification}
   />}
-          {section === "profile" && <ProfileSection user={user} />}
+          {section === "profile" && <ProfileSection
+    user={user}
+    onProfileUpdated={refreshUserProfile}
+  />}
           {section === "settings" && <CustomerSettingsContent user={user} />}
         </div>
       </div>
@@ -1365,20 +1373,72 @@ function NotificationsSection({
 /**
  * Customer profile screen with read-only account/company information.
  */
-function ProfileSection({ user }) {
+function ProfileSection({ user, onProfileUpdated }) {
   const picRef = useRef(null);
-  const [profilePic, setProfilePic] = useState(null);
+  const [profilePic, setProfilePic] = useState(user?.profilePhotoUrl || null);
+  const [photoSaving, setPhotoSaving] = useState(false);
+  const [photoError, setPhotoError] = useState("");
+  const [photoMessage, setPhotoMessage] = useState("");
+
+  useEffect(() => {
+    setProfilePic(user?.profilePhotoUrl || null);
+  }, [user?.profilePhotoUrl]);
 
   /**
-   * Reads the selected profile image locally for an immediate avatar preview.
+   * Function from profileService.js; uploads the selected image through Express and refreshes AuthContext.
    */
-  const handlePicChange = (e) => {
+  const handlePicChange = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => setProfilePic(ev.target?.result);
-    reader.readAsDataURL(file);
+
+    const previousPhoto = profilePic;
+    const previewUrl = URL.createObjectURL(file);
+
+    setProfilePic(previewUrl);
+    setPhotoSaving(true);
+    setPhotoError("");
+    setPhotoMessage("");
+
+    try {
+      const updatedUser = await uploadProfilePhoto(file);
+      setProfilePic(updatedUser.profilePhotoUrl || null);
+      await onProfileUpdated?.();
+      setPhotoMessage("Profile photo saved.");
+    } catch (error) {
+      console.error(error);
+      setProfilePic(previousPhoto);
+      setPhotoError(error.message || "Unable to save profile photo.");
+    } finally {
+      URL.revokeObjectURL(previewUrl);
+      e.target.value = "";
+      setPhotoSaving(false);
+    }
   };
+
+  /**
+   * Function from profileService.js; removes the saved image through Express and refreshes AuthContext.
+   */
+  const handleRemovePhoto = async () => {
+    const previousPhoto = profilePic;
+
+    setPhotoSaving(true);
+    setPhotoError("");
+    setPhotoMessage("");
+
+    try {
+      const updatedUser = await removeProfilePhoto();
+      setProfilePic(updatedUser.profilePhotoUrl || null);
+      await onProfileUpdated?.();
+      setPhotoMessage("Profile photo removed.");
+    } catch (error) {
+      console.error(error);
+      setProfilePic(previousPhoto);
+      setPhotoError(error.message || "Unable to remove profile photo.");
+    } finally {
+      setPhotoSaving(false);
+    }
+  };
+
   const profileFields = [
     ["Full Name", user?.name || "—"],
     ["Email Address", user?.email || "—"],
@@ -1407,6 +1467,7 @@ function ProfileSection({ user }) {
             </div>
             <button
     onClick={() => picRef.current?.click()}
+    disabled={photoSaving}
     className="absolute bottom-0 right-0 h-7 w-7 rounded-full flex items-center justify-center shadow-md hover:opacity-80 transition-opacity"
     style={{ backgroundColor: BS_BLACK }}
   >
@@ -1420,19 +1481,23 @@ function ProfileSection({ user }) {
             <div className="flex gap-2">
               <button
     onClick={() => picRef.current?.click()}
-    className="px-4 py-2 rounded-lg text-xs hover:opacity-90 transition-opacity"
+    disabled={photoSaving}
+    className="px-4 py-2 rounded-lg text-xs hover:opacity-90 transition-opacity disabled:opacity-50"
     style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 600 }}
   >
-                Upload Photo
+                {photoSaving ? "Saving..." : "Upload Photo"}
               </button>
               {profilePic && <button
-    onClick={() => setProfilePic(null)}
-    className="px-4 py-2 rounded-lg text-xs border hover:opacity-80 transition-opacity"
+    onClick={handleRemovePhoto}
+    disabled={photoSaving}
+    className="px-4 py-2 rounded-lg text-xs border hover:opacity-80 transition-opacity disabled:opacity-50"
     style={{ borderColor: "#E5E7EB", color: BS_GRAY }}
   >
                   Remove
                 </button>}
             </div>
+            {photoError && <p className="text-xs mt-3 text-red-700">{photoError}</p>}
+            {photoMessage && <p className="text-xs mt-3 text-green-700">{photoMessage}</p>}
           </div>
         </div>
       </div>

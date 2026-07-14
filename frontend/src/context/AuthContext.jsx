@@ -253,6 +253,22 @@ function AuthProvider({ children }) {
   }
 
   /**
+   * Reloads the signed-in user's Express profile after profile-only updates like avatar changes.
+   */
+  async function refreshUserProfile() {
+    const currentUser = auth.currentUser;
+
+    if (!currentUser) {
+      setUser(null);
+      return null;
+    }
+
+    const profile = await loadUserProfile(currentUser);
+    setUser(profile);
+    return profile;
+  }
+
+  /**
    * Re-authenticates the signed-in Firebase user, then updates their password.
    */
   async function changePassword(currentPassword, newPassword) {
@@ -280,7 +296,7 @@ function AuthProvider({ children }) {
     }
   }
 
-  return <AuthContext.Provider value={{ user, loading, login, register, logout, changePassword }}>
+  return <AuthContext.Provider value={{ user, loading, login, register, logout, changePassword, refreshUserProfile }}>
       {children}
     </AuthContext.Provider>;
 }
