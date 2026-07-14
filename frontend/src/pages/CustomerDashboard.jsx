@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { Fragment, useEffect, useState, useRef } from "react";
 import { useNavigate } from "react-router";
 import {
   LayoutDashboard,
@@ -286,6 +286,20 @@ function requestFolderDocumentStatus(request, document) {
 }
 
 /**
+ * Uses folder-level customer counts from Express to display exact folder/subfolder approval state.
+ */
+function folderAccessCountStatus(folder) {
+  const requestableCount = Number(folder.requestableDocumentCount || 0);
+  const approvedCount = Number(folder.approvedDocumentCount || 0);
+
+  if (requestableCount <= 0) return "";
+  if (approvedCount >= requestableCount) return "approved";
+  if (approvedCount <= 0) return "not-shared";
+
+  return "partial";
+}
+
+/**
  * Shows customers when a folder approval only shared part of the requested folder.
  */
 function requestDecisionSummary(request) {
@@ -371,6 +385,12 @@ function CustomerDashboard() {
     if (request.status === "pending") return true;
     if (request.status !== "approved") return false;
 
+    const countStatus = folderAccessCountStatus(folder);
+
+    if (countStatus) {
+      return countStatus !== "not-shared";
+    }
+
     const stats = folderRequestStats(folder, request);
 
     if (stats.totalCount === 0) {
@@ -382,6 +402,10 @@ function CustomerDashboard() {
   const folderRequestStatusForFolder = (folder, request) => {
     if (!folderRequestBlocksFolder(folder, request)) return "";
     if (request.status !== "approved") return request.status;
+
+    const countStatus = folderAccessCountStatus(folder);
+
+    if (countStatus) return countStatus;
 
     const stats = folderRequestStats(folder, request);
 
@@ -1310,6 +1334,96 @@ function RequestsSection({
     setOpenRequestId(request.id);
     setOpenRequestFolderId(request.folderId || "");
   };
+  const renderOpenRequestPanel = () => {
+    if (!openRequest) return null;
+
+    return <div className="border-t border-gray-100 bg-gray-50 px-5 py-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
+        <div>
+          <h4 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>
+            {openRequestActiveFolder?.path || openRequest.folderPath || openRequest.documentTitle}
+          </h4>
+          <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
+            Folder request contents and sharing status
+          </p>
+        </div>
+        {openRequestCanGoBack && <button
+          type="button"
+          onClick={() => setOpenRequestFolderId(openRequestActiveFolder?.parentFolderId || openRequestRootFolderId)}
+          className="inline-flex items-center gap-1.5 self-start sm:self-auto px-3 py-1.5 rounded-lg text-xs border bg-white transition-opacity hover:opacity-80"
+          style={{ borderColor: "#D1D5DB", color: BS_GRAY, fontWeight: 600 }}
+        >
+          <ArrowLeft size={12} />
+          Back
+        </button>}
+      </div>
+      {openRequestChildFolders.length === 0 && openRequestDocuments.length === 0 ? <div className="rounded-lg border border-gray-100 bg-white p-6 text-center">
+        <Folder size={24} className="mx-auto mb-2" style={{ color: "#D1D5DB" }} />
+        <p className="text-sm" style={{ color: BS_GRAY }}>No folder contents to show here.</p>
+      </div> : <div className="overflow-x-auto rounded-lg border border-gray-100 bg-white">
+        <table className="w-full text-sm">
+          <thead>
+            <tr style={{ backgroundColor: "#FAFAFA" }}>
+              {["Item", "Type", "Status", "Action"].map((h) => <th key={h} className="px-4 py-3 text-left text-xs border-b border-gray-100" style={{ color: BS_GRAY, fontWeight: 500 }}>
+                {h}
+              </th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {openRequestChildFolders.map((folder) => <tr key={`requested-folder-${folder.id}`} style={{ borderBottom: "1px solid #F3F4F6" }}>
+              <td className="px-4 py-3.5">
+                <div className="flex items-center gap-3">
+                  <Folder size={15} style={{ color: BS_GOLD }} />
+                  <div>
+                    <p className="font-medium" style={{ color: BS_BLACK }}>{folder.name}</p>
+                    <p className="text-xs mt-1" style={{ color: BS_GRAY }}>{folder.path}</p>
+                  </div>
+                </div>
+              </td>
+              <td className="px-4 py-3.5">
+                <span className="text-xs px-2 py-0.5 rounded" style={{ backgroundColor: "rgba(242,169,0,0.12)", color: "#A37200" }}>
+                  Folder
+                </span>
+              </td>
+              <td className="px-4 py-3.5">
+                <StatusBadge status={folderStatus(folder) || folderRequestDisplayStatus(openRequest)} />
+              </td>
+              <td className="px-4 py-3.5">
+                <button
+                  type="button"
+                  onClick={() => setOpenRequestFolderId(folder.id)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
+                  style={{ borderColor: "#D1D5DB", color: BS_GRAY, fontWeight: 600 }}
+                >
+                  Open <ChevronRight size={11} />
+                </button>
+              </td>
+            </tr>)}
+            {openRequestDocuments.map((document, index) => <tr key={`requested-document-${document.id}`} style={{ borderBottom: index < openRequestDocuments.length - 1 ? "1px solid #F3F4F6" : "none" }}>
+              <td className="px-4 py-3.5">
+                <div className="flex items-center gap-3">
+                  <FileText size={15} style={{ color: BS_GRAY }} />
+                  <div>
+                    <p className="font-medium" style={{ color: BS_BLACK }}>{document.title}</p>
+                    <p className="text-xs mt-1" style={{ color: BS_GRAY }}>{document.category} · {document.uploadedDate}</p>
+                  </div>
+                </div>
+              </td>
+              <td className="px-4 py-3.5">
+                <span className="text-xs px-2 py-0.5 rounded" style={{ backgroundColor: "#F3F4F6", color: BS_GRAY }}>
+                  {document.type}
+                </span>
+              </td>
+              <td className="px-4 py-3.5">
+                <StatusBadge status={requestFolderDocumentStatus(openRequest, document)} />
+              </td>
+              <td className="px-4 py-3.5 text-xs" style={{ color: "#B6BDC4" }}>—</td>
+            </tr>)}
+          </tbody>
+        </table>
+      </div>}
+    </div>;
+  };
 
   return <div className="space-y-6">
       {
@@ -1480,120 +1594,41 @@ function RequestsSection({
                 </tr>
 	              </thead>
 	              <tbody>
-	                {myRequests.map((req, i) => <tr key={req.id} style={{ borderBottom: i < myRequests.length - 1 ? "1px solid #F3F4F6" : "none" }}>
-	                      <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>{req.documentTitle}</td>
-	                      <td className="px-4 py-3.5">
-	                        <span className="text-xs px-2 py-0.5 rounded" style={{ backgroundColor: "#F3F4F6", color: BS_GRAY }}>
-	                          {req.resourceType === "folder" ? "Folder" : req.documentCategory || "\u2014"}
-	                        </span>
-	                      </td>
-	                      <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{req.dateRequested}</td>
-		                      <td className="px-4 py-3.5">
-		                        <StatusBadge status={folderRequestDisplayStatus(req)} />
-		                      </td>
-                          <td className="px-4 py-3.5 text-xs max-w-[280px]" style={{ color: BS_GRAY }}>
-                            {requestDecisionSummary(req)}
-                          </td>
-                          <td className="px-4 py-3.5">
-                            {req.resourceType === "folder" ? <button
-    type="button"
-    onClick={() => toggleOpenRequest(req)}
-    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
-    style={{ borderColor: "#D1D5DB", color: BS_GRAY, fontWeight: 600 }}
-  >
-                              {openRequestId === req.id ? "Close" : "Open"}
-                              {openRequestId !== req.id && <ChevronRight size={11} />}
-                            </button> : <span className="text-xs" style={{ color: "#B6BDC4" }}>—</span>}
-                          </td>
-	                    </tr>)}
+	                {myRequests.map((req, i) => <Fragment key={req.id}>
+                    <tr style={{ borderBottom: i < myRequests.length - 1 || openRequestId === req.id ? "1px solid #F3F4F6" : "none" }}>
+	                    <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>{req.documentTitle}</td>
+	                    <td className="px-4 py-3.5">
+	                      <span className="text-xs px-2 py-0.5 rounded" style={{ backgroundColor: "#F3F4F6", color: BS_GRAY }}>
+	                        {req.resourceType === "folder" ? "Folder" : req.documentCategory || "\u2014"}
+	                      </span>
+	                    </td>
+	                    <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{req.dateRequested}</td>
+		                  <td className="px-4 py-3.5">
+		                    <StatusBadge status={folderRequestDisplayStatus(req)} />
+		                  </td>
+                      <td className="px-4 py-3.5 text-xs max-w-[280px]" style={{ color: BS_GRAY }}>
+                        {requestDecisionSummary(req)}
+                      </td>
+                      <td className="px-4 py-3.5">
+                        {req.resourceType === "folder" ? <button
+                          type="button"
+                          onClick={() => toggleOpenRequest(req)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
+                          style={{ borderColor: "#D1D5DB", color: BS_GRAY, fontWeight: 600 }}
+                        >
+                          {openRequestId === req.id ? "Close" : "Open"}
+                          {openRequestId !== req.id && <ChevronRight size={11} />}
+                        </button> : <span className="text-xs" style={{ color: "#B6BDC4" }}>—</span>}
+                      </td>
+	                  </tr>
+                    {openRequestId === req.id && <tr>
+                      <td colSpan={6} className="p-0">
+                        {renderOpenRequestPanel()}
+                      </td>
+                    </tr>}
+                  </Fragment>)}
 	              </tbody>
             </table>
-            {openRequest && <div className="border-t border-gray-100 bg-gray-50 px-5 py-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
-                  <div>
-                    <h4 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>
-                      {openRequestActiveFolder?.path || openRequest.folderPath || openRequest.documentTitle}
-                    </h4>
-                    <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
-                      Folder request contents and sharing status
-                    </p>
-                  </div>
-                  {openRequestCanGoBack && <button
-    type="button"
-    onClick={() => setOpenRequestFolderId(openRequestActiveFolder?.parentFolderId || openRequestRootFolderId)}
-    className="inline-flex items-center gap-1.5 self-start sm:self-auto px-3 py-1.5 rounded-lg text-xs border bg-white transition-opacity hover:opacity-80"
-    style={{ borderColor: "#D1D5DB", color: BS_GRAY, fontWeight: 600 }}
-  >
-                    <ArrowLeft size={12} />
-                    Back
-                  </button>}
-                </div>
-                {openRequestChildFolders.length === 0 && openRequestDocuments.length === 0 ? <div className="rounded-lg border border-gray-100 bg-white p-6 text-center">
-                    <Folder size={24} className="mx-auto mb-2" style={{ color: "#D1D5DB" }} />
-                    <p className="text-sm" style={{ color: BS_GRAY }}>No folder contents to show here.</p>
-                  </div> : <div className="overflow-x-auto rounded-lg border border-gray-100 bg-white">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr style={{ backgroundColor: "#FAFAFA" }}>
-                          {["Item", "Type", "Status", "Action"].map((h) => <th key={h} className="px-4 py-3 text-left text-xs border-b border-gray-100" style={{ color: BS_GRAY, fontWeight: 500 }}>
-                              {h}
-                            </th>)}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {openRequestChildFolders.map((folder) => <tr key={`requested-folder-${folder.id}`} style={{ borderBottom: "1px solid #F3F4F6" }}>
-                            <td className="px-4 py-3.5">
-                              <div className="flex items-center gap-3">
-                                <Folder size={15} style={{ color: BS_GOLD }} />
-                                <div>
-                                  <p className="font-medium" style={{ color: BS_BLACK }}>{folder.name}</p>
-                                  <p className="text-xs mt-1" style={{ color: BS_GRAY }}>{folder.path}</p>
-                                </div>
-                              </div>
-                            </td>
-                            <td className="px-4 py-3.5">
-                              <span className="text-xs px-2 py-0.5 rounded" style={{ backgroundColor: "rgba(242,169,0,0.12)", color: "#A37200" }}>
-                                Folder
-                              </span>
-                            </td>
-                            <td className="px-4 py-3.5">
-                              <StatusBadge status={folderStatus(folder) || folderRequestDisplayStatus(openRequest)} />
-                            </td>
-                            <td className="px-4 py-3.5">
-                              <button
-    type="button"
-    onClick={() => setOpenRequestFolderId(folder.id)}
-    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
-    style={{ borderColor: "#D1D5DB", color: BS_GRAY, fontWeight: 600 }}
-  >
-                                Open <ChevronRight size={11} />
-                              </button>
-                            </td>
-                          </tr>)}
-                        {openRequestDocuments.map((document, index) => <tr key={`requested-document-${document.id}`} style={{ borderBottom: index < openRequestDocuments.length - 1 ? "1px solid #F3F4F6" : "none" }}>
-                            <td className="px-4 py-3.5">
-                              <div className="flex items-center gap-3">
-                                <FileText size={15} style={{ color: BS_GRAY }} />
-                                <div>
-                                  <p className="font-medium" style={{ color: BS_BLACK }}>{document.title}</p>
-                                  <p className="text-xs mt-1" style={{ color: BS_GRAY }}>{document.category} · {document.uploadedDate}</p>
-                                </div>
-                              </div>
-                            </td>
-                            <td className="px-4 py-3.5">
-                              <span className="text-xs px-2 py-0.5 rounded" style={{ backgroundColor: "#F3F4F6", color: BS_GRAY }}>
-                                {document.type}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3.5">
-                              <StatusBadge status={requestFolderDocumentStatus(openRequest, document)} />
-                            </td>
-                            <td className="px-4 py-3.5 text-xs" style={{ color: "#B6BDC4" }}>—</td>
-                          </tr>)}
-                      </tbody>
-                    </table>
-                  </div>}
-              </div>}
           </div>}
       </div>
     </div>;
