@@ -1468,13 +1468,78 @@ function ProfileSection({ user }) {
  * Customer settings page for security preferences and contact notes.
  */
 function CustomerSettingsContent({ user }) {
-  const [pwSaved, setPwSaved] = useState(false);
+  const { changePassword } = useAuth();
+  const [passwordForm, setPasswordForm] = useState({
+    currentPassword: "",
+    newPassword: "",
+    confirmPassword: ""
+  });
+  const [passwordSaving, setPasswordSaving] = useState(false);
+  const [passwordError, setPasswordError] = useState("");
+  const [passwordMessage, setPasswordMessage] = useState("");
   const [prefSaved, setPrefSaved] = useState(false);
   const [defaultDuration, setDefaultDuration] = useState("30");
   const [autoRenew, setAutoRenew] = useState(true);
   const [notifyApproval, setNotifyApproval] = useState(true);
   const [notifyDenial, setNotifyDenial] = useState(true);
   const [notifyExpiry, setNotifyExpiry] = useState(true);
+
+  /**
+   * Stores password form changes before Firebase receives the update request.
+   */
+  const updatePasswordForm = (field) => (event) => {
+    setPasswordForm((currentForm) => ({
+      ...currentForm,
+      [field]: event.target.value
+    }));
+    setPasswordError("");
+    setPasswordMessage("");
+  };
+
+  /**
+   * Function from AuthContext.jsx; checks current password, re-authenticates Firebase Auth, then saves the new password.
+   */
+  const handlePasswordSubmit = async (event) => {
+    event.preventDefault();
+    setPasswordError("");
+    setPasswordMessage("");
+
+    if (!passwordForm.currentPassword || !passwordForm.newPassword || !passwordForm.confirmPassword) {
+      setPasswordError("Enter your current password and the new password twice.");
+      return;
+    }
+
+    if (passwordForm.newPassword.length < 6) {
+      setPasswordError("New password must be at least 6 characters.");
+      return;
+    }
+
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      setPasswordError("New password and confirmation do not match.");
+      return;
+    }
+
+    setPasswordSaving(true);
+
+    try {
+      const result = await changePassword(passwordForm.currentPassword, passwordForm.newPassword);
+
+      if (!result.success) {
+        setPasswordError(result.error || "Unable to change password.");
+        return;
+      }
+
+      setPasswordForm({
+        currentPassword: "",
+        newPassword: "",
+        confirmPassword: ""
+      });
+      setPasswordMessage("Password updated.");
+    } finally {
+      setPasswordSaving(false);
+    }
+  };
+
   return <div className="w-full space-y-8">
       {
     /* Header */
@@ -1501,26 +1566,36 @@ function CustomerSettingsContent({ user }) {
   }
         <div className="bg-white rounded-xl border border-gray-100 p-8">
           <h3 className="text-sm mb-4" style={{ color: BS_BLACK, fontWeight: 600 }}>Change Password</h3>
-          <div className="space-y-4">
-            {["Current Password", "New Password", "Confirm New Password"].map((label) => <div key={label}>
-                <label className="block text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 500 }}>{label}</label>
-                <input
-    type="password"
-    placeholder="••••••••"
-    className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
-  />
-              </div>)}
+          <form onSubmit={handlePasswordSubmit} className="space-y-4">
+            {[
+              ["currentPassword", "Current Password"],
+              ["newPassword", "New Password"],
+              ["confirmPassword", "Confirm New Password"]
+            ].map(([field, label]) => <div key={field}>
+              <label className="block text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 500 }}>{label}</label>
+              <input
+                type="password"
+                value={passwordForm[field]}
+                onChange={updatePasswordForm(field)}
+                placeholder="••••••••"
+                className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
+              />
+            </div>)}
+            {passwordError && <div className="px-3 py-2 rounded-lg text-xs text-red-700 bg-red-50 border border-red-100">
+              {passwordError}
+            </div>}
+            {passwordMessage && <div className="px-3 py-2 rounded-lg text-xs text-green-700 bg-green-50 border border-green-100">
+              {passwordMessage}
+            </div>}
             <button
-    onClick={() => {
-      setPwSaved(true);
-      setTimeout(() => setPwSaved(false), 2500);
-    }}
-    className="px-5 py-2.5 rounded-lg text-sm border transition-opacity hover:opacity-80"
-    style={{ borderColor: BS_BLACK, color: BS_BLACK }}
-  >
-              {pwSaved ? "\u2713 Saved" : "Change Password"}
+              type="submit"
+              disabled={passwordSaving}
+              className="px-5 py-2.5 rounded-lg text-sm border transition-opacity hover:opacity-80 disabled:opacity-50"
+              style={{ borderColor: BS_BLACK, color: BS_BLACK }}
+            >
+              {passwordSaving ? "Saving..." : "Change Password"}
             </button>
-          </div>
+          </form>
         </div>
 
         {

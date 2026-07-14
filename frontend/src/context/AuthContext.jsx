@@ -2,10 +2,13 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import {
   createUserWithEmailAndPassword,
+  EmailAuthProvider,
   onAuthStateChanged,
+  reauthenticateWithCredential,
   sendEmailVerification,
   signInWithEmailAndPassword,
-  signOut
+  signOut,
+  updatePassword
 } from "firebase/auth";
 // Firebase client from firebaseConfig.js; AuthContext checks login state and signs users in/out.
 import { auth } from "../firebase/firebaseConfig";
@@ -40,6 +43,12 @@ function formatFirebaseError(error) {
 
     case "auth/weak-password":
       return "Password must be at least 6 characters.";
+
+    case "auth/requires-recent-login":
+      return "Please sign out, sign back in, and try changing your password again.";
+
+    case "auth/no-current-user":
+      return "You must be signed in to change your password.";
 
     case "auth/email-not-verified":
       return "Please verify your email before signing in.";
@@ -243,7 +252,35 @@ function AuthProvider({ children }) {
     setUser(null);
   }
 
-  return <AuthContext.Provider value={{ user, loading, login, register, logout }}>
+  /**
+   * Re-authenticates the signed-in Firebase user, then updates their password.
+   */
+  async function changePassword(currentPassword, newPassword) {
+    try {
+      const currentUser = auth.currentUser;
+
+      if (!currentUser?.email) {
+        throw authError("You must be signed in to change your password.", "auth/no-current-user");
+      }
+
+      const credential = EmailAuthProvider.credential(
+        currentUser.email,
+        currentPassword
+      );
+
+      await reauthenticateWithCredential(currentUser, credential);
+      await updatePassword(currentUser, newPassword);
+
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: formatFirebaseError(error)
+      };
+    }
+  }
+
+  return <AuthContext.Provider value={{ user, loading, login, register, logout, changePassword }}>
       {children}
     </AuthContext.Provider>;
 }
