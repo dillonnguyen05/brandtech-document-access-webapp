@@ -618,19 +618,38 @@ router.patch("/:requestId/exclusions", async (req, res) => {
 
   const folderScope = await resolveFolderExclusions(accessRequest, excludedDocumentIds);
   const validExcludedDocumentIds = folderScope.excludedDocumentIds;
+  const previousExcludedDocumentIds = cleanDocumentIds(accessRequest.excludedDocumentIds);
+  const previousExcludedDocumentIdSet = new Set(previousExcludedDocumentIds);
+  const nextExcludedDocumentIdSet = new Set(validExcludedDocumentIds);
+  const newlyExcludedDocumentCount = validExcludedDocumentIds.filter((documentId) => (
+    !previousExcludedDocumentIdSet.has(documentId)
+  )).length;
+  const restoredDocumentCount = previousExcludedDocumentIds.filter((documentId) => (
+    !nextExcludedDocumentIdSet.has(documentId)
+  )).length;
+  const changedDocumentCount = newlyExcludedDocumentCount + restoredDocumentCount;
 
   const admin = adminIdentity(req);
   const documentTitle = accessRequest.documentTitle
     || accessRequest.folderName
     || accessRequest.folderPath
     || "the folder";
-  const notificationType = validExcludedDocumentIds.length > 0 ? "revoked" : "approved";
-  const notificationMessage = validExcludedDocumentIds.length > 0
-    ? `${validExcludedDocumentIds.length} document(s) were removed from your access to ${documentTitle}.`
-    : `Your access to all shared documents inside ${documentTitle} has been restored.`;
-  const auditMessage = validExcludedDocumentIds.length > 0
-    ? `${validExcludedDocumentIds.length} nested document(s) unshared from this folder access.`
-    : "All nested document exclusions were removed from this folder access.";
+  const notificationType = restoredDocumentCount > 0 ? "approved" : "revoked";
+  let notificationMessage = "";
+  let auditMessage = "";
+
+  if (restoredDocumentCount > 0 && newlyExcludedDocumentCount > 0) {
+    notificationMessage = `Your access to ${documentTitle} was updated: ${restoredDocumentCount} document(s) were added back and ${newlyExcludedDocumentCount} document(s) were removed.`;
+    auditMessage = `${restoredDocumentCount} nested document(s) restored and ${newlyExcludedDocumentCount} nested document(s) unshared from this folder access.`;
+  } else if (restoredDocumentCount > 0) {
+    notificationMessage = `${restoredDocumentCount} document(s) were added back to your access to ${documentTitle}.`;
+    auditMessage = `${restoredDocumentCount} nested document(s) restored to this folder access.`;
+  } else if (newlyExcludedDocumentCount > 0) {
+    notificationMessage = `${newlyExcludedDocumentCount} document(s) were removed from your access to ${documentTitle}.`;
+    auditMessage = `${newlyExcludedDocumentCount} nested document(s) unshared from this folder access.`;
+  } else {
+    auditMessage = "Folder access was saved with no document access changes.";
+  }
   const notificationRef = adminDb.collection("notifications").doc();
   const auditRef = adminDb.collection("auditLog").doc();
   const batch = adminDb.batch();
@@ -646,21 +665,23 @@ router.patch("/:requestId/exclusions", async (req, res) => {
     lastAction: "folder-exclusions-updated"
   });
 
-  batch.set(notificationRef, {
-    recipientId: accessRequest.customerId,
-    recipientName: accessRequest.customerName || "",
-    recipientEmail: accessRequest.customerEmail || "",
-    type: notificationType,
-    message: notificationMessage,
-    resourceType: "folder",
-    documentId: "",
-    folderId: accessRequest.folderId || "",
-    folderPath: accessRequest.folderPath || "",
-    documentTitle,
-    requestId: req.params.requestId,
-    read: false,
-    createdAt: FieldValue.serverTimestamp()
-  });
+  if (changedDocumentCount > 0) {
+    batch.set(notificationRef, {
+      recipientId: accessRequest.customerId,
+      recipientName: accessRequest.customerName || "",
+      recipientEmail: accessRequest.customerEmail || "",
+      type: notificationType,
+      message: notificationMessage,
+      resourceType: "folder",
+      documentId: "",
+      folderId: accessRequest.folderId || "",
+      folderPath: accessRequest.folderPath || "",
+      documentTitle,
+      requestId: req.params.requestId,
+      read: false,
+      createdAt: FieldValue.serverTimestamp()
+    });
+  }
 
   batch.set(auditRef, {
     customerId: accessRequest.customerId,
