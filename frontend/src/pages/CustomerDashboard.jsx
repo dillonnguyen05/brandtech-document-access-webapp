@@ -205,6 +205,20 @@ function folderCoveredByRequest(folder, request) {
 }
 
 /**
+ * Shows customers when a folder approval only shared part of the requested folder.
+ */
+function requestDecisionSummary(request) {
+  const excludedCount = Number(request.excludedDocumentCount || 0);
+
+  if (request.resourceType === "folder" && request.status === "approved" && excludedCount > 0) {
+    const noun = excludedCount === 1 ? "item" : "items";
+    return `${excludedCount} ${noun} not shared.`;
+  }
+
+  return request.decisionMessage || "—";
+}
+
+/**
  * Builds breadcrumbs for customer folder browsing.
  */
 function buildFolderBreadcrumbs(folders, currentFolderId) {
@@ -269,7 +283,7 @@ function CustomerDashboard() {
     document.accessStatus === "approved" || document.approved === true
   ));
   const documentFolders = folders.filter((folder) => (
-    customerDocuments.some((document) => folderContainsDocument(folder, document))
+    approvedDocs.some((document) => folderContainsDocument(folder, document))
   ));
   const documentBreadcrumbs = buildFolderBreadcrumbs(documentFolders, documentFolderId);
   const requestBreadcrumbs = buildFolderBreadcrumbs(folders, requestFolderId);
@@ -278,7 +292,7 @@ function CustomerDashboard() {
   const visibleDocumentFolders = documentFolders.filter((folder) => (
     folder.parentFolderId === documentFolderId
   ));
-  const visibleDocuments = customerDocuments.filter((document) => (
+  const visibleDocuments = approvedDocs.filter((document) => (
     (document.folderId || "") === documentFolderId
   ));
   const visibleRequestFolders = folders.filter((folder) => (
@@ -688,8 +702,7 @@ function CustomerDashboard() {
     onNavigate={setSection}
   />}
           {section === "documents" && <DocumentsSection
-    approvedDocs={approvedDocs}
-    availableDocumentCount={customerDocuments.length}
+    approvedDocumentCount={approvedDocs.length}
     visibleDocuments={visibleDocuments}
     visibleDocumentFolders={visibleDocumentFolders}
     documentBreadcrumbs={documentBreadcrumbs}
@@ -697,8 +710,6 @@ function CustomerDashboard() {
     documentFolderId={documentFolderId}
     setDocumentFolderId={setDocumentFolderId}
     documentLoadError={documentLoadError}
-    folderStatus={folderStatus}
-    onRequestAccess={requestAccess}
     onPreviewDocument={setPreviewDocument}
     onDownloadDocument={handleDownloadDocument}
   />}
@@ -930,8 +941,7 @@ function DashboardHome({
  * Customer document page for requesting access or opening approved files.
  */
 function DocumentsSection({
-  approvedDocs,
-  availableDocumentCount,
+  approvedDocumentCount,
   visibleDocuments,
   visibleDocumentFolders,
   documentBreadcrumbs,
@@ -939,8 +949,6 @@ function DocumentsSection({
   documentFolderId,
   setDocumentFolderId,
   documentLoadError,
-  folderStatus,
-  onRequestAccess,
   onPreviewDocument,
   onDownloadDocument
 }) {
@@ -960,11 +968,6 @@ function DocumentsSection({
       document.folderPath
     )
   ));
-  const requestButtonLabel = (status) => {
-    if (status === "pending") return "Pending";
-    if (status === "denied" || status === "revoked") return "Request Again";
-    return "Request Access";
-  };
 
   return <div className="bg-white rounded-xl border border-gray-100">
       <div className="px-5 py-4 border-b border-gray-100 flex flex-col gap-3">
@@ -972,7 +975,7 @@ function DocumentsSection({
           <div>
             <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>{folderLocationLabel}</h3>
             <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
-              {availableDocumentCount} document{availableDocumentCount !== 1 ? "s" : ""} available • {approvedDocs.length} approved • {filteredVisibleDocuments.length} shown
+              {approvedDocumentCount} approved document{approvedDocumentCount !== 1 ? "s" : ""} • {filteredVisibleDocuments.length} shown
             </p>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
@@ -1013,10 +1016,10 @@ function DocumentsSection({
       {documentLoadError && <div className="mx-5 mt-4 px-4 py-3 rounded-lg text-sm text-red-700 bg-red-50 border border-red-100">
           {documentLoadError}
         </div>}
-      {availableDocumentCount === 0 ? <div className="p-10 text-center">
+      {approvedDocumentCount === 0 ? <div className="p-10 text-center">
           <FileText size={32} className="mx-auto mb-3" style={{ color: "#D1D5DB" }} />
-          <p className="text-sm" style={{ color: BS_GRAY }}>No documents are available yet.</p>
-          <p className="text-xs mt-1" style={{ color: "#9CA3AF" }}>Documents assigned to your company will appear here.</p>
+          <p className="text-sm" style={{ color: BS_GRAY }}>No approved documents yet.</p>
+          <p className="text-xs mt-1" style={{ color: "#9CA3AF" }}>Request access from the Requests tab.</p>
         </div> : <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -1027,11 +1030,7 @@ function DocumentsSection({
               </tr>
             </thead>
             <tbody>
-              {filteredVisibleDocumentFolders.map((folder) => {
-                const status = folderStatus(folder);
-                const canRequest = status !== "approved" && status !== "pending";
-
-                return <tr key={`folder-${folder.id}`} style={{ borderBottom: "1px solid #F3F4F6" }}>
+              {filteredVisibleDocumentFolders.map((folder) => <tr key={`folder-${folder.id}`} style={{ borderBottom: "1px solid #F3F4F6" }}>
                   <td className="px-4 py-3.5">
                     <button
     type="button"
@@ -1051,7 +1050,7 @@ function DocumentsSection({
                   <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>—</td>
                   <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{folder.createdDate}</td>
                   <td className="px-4 py-3.5">
-                    {status ? <StatusBadge status={status} /> : <span className="text-xs" style={{ color: BS_GRAY }}>Available</span>}
+                    <StatusBadge status="approved" />
                   </td>
                   <td className="px-4 py-3.5">
                     <div className="flex flex-wrap items-center gap-2">
@@ -1063,25 +1062,10 @@ function DocumentsSection({
   >
                         Open <ChevronRight size={11} />
                       </button>
-                      <button
-    type="button"
-    onClick={() => onRequestAccess({ ...folder, resourceType: "folder" })}
-    disabled={!canRequest}
-    className="px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80 disabled:opacity-50"
-    style={{ backgroundColor: canRequest ? BS_GOLD : "#E5E7EB", color: canRequest ? BS_BLACK : BS_GRAY, fontWeight: 500 }}
-  >
-                        {status === "approved" ? "Approved" : status === "pending" ? "Pending" : "Request Folder"}
-                      </button>
                     </div>
                   </td>
-                </tr>;
-              })}
-              {filteredVisibleDocuments.map((doc, i) => {
-                const status = doc.accessStatus || (doc.approved ? "approved" : "");
-                const canOpen = status === "approved";
-                const canRequest = status !== "approved" && status !== "pending";
-
-                return <tr key={doc.id} style={{ borderBottom: i < filteredVisibleDocuments.length - 1 ? "1px solid #F3F4F6" : "none" }}>
+                </tr>)}
+              {filteredVisibleDocuments.map((doc, i) => <tr key={doc.id} style={{ borderBottom: i < filteredVisibleDocuments.length - 1 ? "1px solid #F3F4F6" : "none" }}>
                   <td className="px-4 py-3.5">
                     <div className="flex items-center gap-3">
                       <div className="p-1.5 rounded" style={{ backgroundColor: "#F3F4F6" }}>
@@ -1098,11 +1082,10 @@ function DocumentsSection({
                   <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{doc.type}</td>
                   <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{doc.uploadedDate}</td>
                   <td className="px-4 py-3.5">
-                    {status ? <StatusBadge status={status} /> : <span className="text-xs" style={{ color: BS_GRAY }}>Available</span>}
+                    <StatusBadge status="approved" />
                   </td>
                   <td className="px-4 py-3.5">
                     <div className="flex flex-wrap items-center gap-2">
-                      {canOpen ? <>
 	                      <button
 	    onClick={() => onPreviewDocument(doc)}
 	    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80"
@@ -1118,22 +1101,12 @@ function DocumentsSection({
 		  >
 		                        <Download size={11} /> Download
 		                      </button>
-                      </> : <button
-    type="button"
-    onClick={() => onRequestAccess(doc)}
-    disabled={!canRequest}
-    className="px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80 disabled:opacity-50"
-    style={{ backgroundColor: canRequest ? BS_GOLD : "#E5E7EB", color: canRequest ? BS_BLACK : BS_GRAY, fontWeight: 500 }}
-  >
-                        {requestButtonLabel(status)}
-                      </button>}
 		                    </div>
 		                  </td>
-                </tr>;
-              })}
+                </tr>)}
               {filteredVisibleDocumentFolders.length === 0 && filteredVisibleDocuments.length === 0 && <tr>
                   <td colSpan={6} className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
-                    {documentSearch.trim() ? "No matching documents in this folder." : "No documents in this folder."}
+                    {documentSearch.trim() ? "No matching approved documents in this folder." : "No approved documents in this folder."}
                   </td>
                 </tr>}
             </tbody>
@@ -1345,7 +1318,7 @@ function RequestsSection({
 		                        <StatusBadge status={req.status} />
 		                      </td>
                           <td className="px-4 py-3.5 text-xs max-w-[280px]" style={{ color: BS_GRAY }}>
-                            {req.decisionMessage || "—"}
+                            {requestDecisionSummary(req)}
                           </td>
 	                    </tr>)}
 	              </tbody>
