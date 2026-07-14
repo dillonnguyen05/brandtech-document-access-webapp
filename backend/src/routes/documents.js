@@ -131,9 +131,24 @@ function bodyValues(value) {
  * Converts Firestore Timestamp values into ISO strings for React.
  */
 function timestampToIso(value) {
-  return typeof value?.toDate === "function"
-    ? value.toDate().toISOString()
-    : null;
+  const date = timestampToDate(value);
+
+  return date ? date.toISOString() : null;
+}
+
+/**
+ * Converts Firestore Timestamp or Date values into Date objects.
+ */
+function timestampToDate(value) {
+  if (typeof value?.toDate === "function") {
+    return value.toDate();
+  }
+
+  if (value instanceof Date) {
+    return value;
+  }
+
+  return null;
 }
 
 /**
@@ -360,6 +375,22 @@ function folderRequestCoversDocument(accessRequest, document, documentId = "") {
 }
 
 /**
+ * Checks whether an approved request has passed its optional access expiration.
+ */
+function accessRequestExpired(accessRequest) {
+  const expiresAt = timestampToDate(accessRequest.accessExpiresAt);
+
+  return Boolean(expiresAt && expiresAt.getTime() <= Date.now());
+}
+
+/**
+ * Checks whether an access request currently grants access.
+ */
+function requestGrantsAccess(accessRequest) {
+  return accessRequest.status === "approved" && !accessRequestExpired(accessRequest);
+}
+
+/**
  * Checks if a document belongs inside a folder or one of its subfolders.
  */
 function folderContainsDocument(folder, document) {
@@ -407,14 +438,21 @@ function documentAccessStatus(customerRequests, documentId, document) {
     && folderRequestCoversDocument(data, document, documentId)
   ));
   const statuses = [
-    directRequest?.data.status,
-    ...folderRequests.map(({ data }) => data.status)
+    directRequest?.data.status === "approved" && accessRequestExpired(directRequest.data)
+      ? "expired"
+      : directRequest?.data.status,
+    ...folderRequests.map(({ data }) => (
+      data.status === "approved" && accessRequestExpired(data)
+        ? "expired"
+        : data.status
+    ))
   ].filter(Boolean);
 
   if (statuses.includes("approved")) return "approved";
   if (statuses.includes("pending")) return "pending";
   if (directRequest?.data.status === "denied") return "denied";
   if (directRequest?.data.status === "revoked") return "revoked";
+  if (statuses.includes("expired")) return "expired";
   if (statuses.includes("denied")) return "denied";
   if (statuses.includes("revoked")) return "revoked";
 
@@ -1381,7 +1419,7 @@ documentAccessRouter.get("/", async (req, res) => {
   }));
   const approvedRequests = customerRequests
     .map(({ data }) => data)
-    .filter((request) => request.status === "approved");
+    .filter(requestGrantsAccess);
   const approvedDocumentIds = new Set(
     approvedRequests
       .filter((request) => (request.resourceType || "document") === "document")
@@ -1475,7 +1513,10 @@ documentAccessRouter.get("/:documentId/download", async (req, res) => {
       .doc(`${req.auth.uid}_${documentRef.id}`)
       .get();
 
-    if (directRequestSnapshot.exists && directRequestSnapshot.data().status === "approved") {
+    if (
+      directRequestSnapshot.exists
+      && requestGrantsAccess(directRequestSnapshot.data())
+    ) {
       approvedAccessRequest = {
         id: directRequestSnapshot.id,
         data: directRequestSnapshot.data()
@@ -1488,7 +1529,7 @@ documentAccessRouter.get("/:documentId/download", async (req, res) => {
         .where("customerId", "==", req.auth.uid)
         .get();
       const approvedFolderRequest = folderRequestSnapshot.docs.find((requestSnapshot) => (
-        requestSnapshot.data().status === "approved"
+        requestGrantsAccess(requestSnapshot.data())
         && requestSnapshot.data().resourceType === "folder"
         && folderRequestCoversDocument(requestSnapshot.data(), document, documentRef.id)
       ));

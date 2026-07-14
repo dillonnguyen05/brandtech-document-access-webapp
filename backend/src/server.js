@@ -17,6 +17,7 @@ import documentsRouter, {
 } from "./routes/documents.js";
 import notificationsRouter from "./routes/notifications.js";
 import registrationRouter from "./routes/registration.js";
+import settingsRouter from "./routes/settings.js";
 
 const app = express();
 
@@ -115,6 +116,12 @@ app.use(
   verifyFirebaseToken,
   requireAdmin,
   auditLogRouter
+);
+app.use(
+  "/api/admin/settings",
+  verifyFirebaseToken,
+  requireAdmin,
+  settingsRouter
 );
 
 // Customer-facing routes require a valid, active account before document actions are allowed.

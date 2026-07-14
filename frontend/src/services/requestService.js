@@ -69,7 +69,8 @@ function mapApiRequests(requests = []) {
   return requests
     .map((request) => ({
       ...request,
-      dateRequested: formatRequestDate(request.createdAt)
+      dateRequested: formatRequestDate(request.createdAt),
+      reviewDueDate: formatRequestDate(request.reviewDueAt)
     }))
     .sort(sortByCreatedAtAsc);
 }

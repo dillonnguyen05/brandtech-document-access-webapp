@@ -57,7 +57,8 @@ function StatusBadge({ status }) {
     pending: { bg: "rgba(242,169,0,0.12)", color: "#A37200", label: "Pending Review", icon: <Clock size={11} /> },
     approved: { bg: "rgba(34,197,94,0.12)", color: "#166534", label: "Approved", icon: <CheckCircle size={11} /> },
     denied: { bg: "rgba(138,42,43,0.12)", color: BS_MAROON, label: "Denied", icon: <XCircle size={11} /> },
-    revoked: { bg: "rgba(138,42,43,0.12)", color: BS_MAROON, label: "Revoked", icon: <AlertCircle size={11} /> }
+    revoked: { bg: "rgba(138,42,43,0.12)", color: BS_MAROON, label: "Revoked", icon: <AlertCircle size={11} /> },
+    expired: { bg: "rgba(138,42,43,0.12)", color: BS_MAROON, label: "Expired", icon: <AlertCircle size={11} /> }
   };
   const cfg = map[status] || { bg: "#F3F4F6", color: BS_GRAY, label: status, icon: null };
   return <span
@@ -1478,7 +1479,7 @@ function CustomerSettingsContent({ user }) {
   const [passwordError, setPasswordError] = useState("");
   const [passwordMessage, setPasswordMessage] = useState("");
   const [prefSaved, setPrefSaved] = useState(false);
-  const [defaultDuration, setDefaultDuration] = useState("30");
+  const [defaultDuration, setDefaultDuration] = useState("0");
   const [autoRenew, setAutoRenew] = useState(true);
   const [notifyApproval, setNotifyApproval] = useState(true);
   const [notifyDenial, setNotifyDenial] = useState(true);
@@ -1613,9 +1614,9 @@ function CustomerSettingsContent({ user }) {
     className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
     style={{ color: BS_BLACK }}
   >
-                {[["7", "7 days"], ["14", "14 days"], ["30", "30 days"], ["60", "60 days"], ["90", "90 days"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                {[["0", "No expiry"], ["7", "7 days"], ["14", "14 days"], ["30", "30 days"], ["60", "60 days"], ["90", "90 days"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               </select>
-              <p className="text-xs mt-1" style={{ color: BS_GRAY }}>Pre-filled when submitting a new request.</p>
+              <p className="text-xs mt-1" style={{ color: BS_GRAY }}>No expiry means access stays active until an admin revokes it.</p>
             </div>
             <div>
               <label className="flex items-center justify-between gap-4 cursor-pointer select-none">

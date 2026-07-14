@@ -1,7 +1,8 @@
 import express from "express";
-import { FieldValue } from "firebase-admin/firestore";
+import { FieldValue, Timestamp } from "firebase-admin/firestore";
 
 import { adminDb } from "../firebaseAdmin.js";
+import { loadAccessRequestSettings } from "./settings.js";
 
 const router = express.Router();
 const customerAccessRequestsRouter = express.Router();
@@ -88,24 +89,90 @@ function cleanDocumentIds(value) {
  * Converts Firestore Timestamp values into ISO strings for React.
  */
 function timestampToIso(value) {
-  return typeof value?.toDate === "function"
-    ? value.toDate().toISOString()
-    : null;
+  const date = timestampToDate(value);
+
+  return date ? date.toISOString() : null;
+}
+
+/**
+ * Converts Firestore Timestamp or Date values into Date objects.
+ */
+function timestampToDate(value) {
+  if (typeof value?.toDate === "function") {
+    return value.toDate();
+  }
+
+  if (value instanceof Date) {
+    return value;
+  }
+
+  return null;
+}
+
+/**
+ * Calculates the review due date using the saved admin review window.
+ */
+function reviewDueDate(createdAt, reviewWindowDays) {
+  const createdDate = timestampToDate(createdAt);
+
+  if (!createdDate) return null;
+
+  return new Date(
+    createdDate.getTime() + (reviewWindowDays * 24 * 60 * 60 * 1000)
+  );
+}
+
+/**
+ * Calculates the access expiration timestamp from saved admin defaults.
+ */
+function accessExpirationTimestamp(defaultAccessDurationDays) {
+  if (!defaultAccessDurationDays) return null;
+
+  return Timestamp.fromDate(
+    new Date(Date.now() + (defaultAccessDurationDays * 24 * 60 * 60 * 1000))
+  );
+}
+
+/**
+ * Checks whether an approved request has passed its optional access expiration.
+ */
+function accessRequestExpired(accessRequest) {
+  const expiresAt = timestampToDate(accessRequest.accessExpiresAt);
+
+  return Boolean(expiresAt && expiresAt.getTime() <= Date.now());
+}
+
+/**
+ * Checks whether an existing request should block a duplicate customer request.
+ */
+function requestBlocksNewSubmission(accessRequest) {
+  if (accessRequest.status === "pending") return true;
+
+  return accessRequest.status === "approved" && !accessRequestExpired(accessRequest);
 }
 
 /**
  * Shapes an access request document for the admin/customer dashboards.
  */
-function formatRequestSnapshot(requestSnapshot) {
+function formatRequestSnapshot(requestSnapshot, settings = {}) {
   const data = requestSnapshot.data();
   const resourceType = data.resourceType || (data.folderId ? "folder" : "document");
+  const reviewWindowDays = settings.reviewWindowDays || 7;
+  const dueDate = data.status === "pending"
+    ? reviewDueDate(data.createdAt, reviewWindowDays)
+    : null;
 
   return {
     id: requestSnapshot.id,
     ...data,
     resourceType,
     createdAt: timestampToIso(data.createdAt),
-    reviewedAt: timestampToIso(data.reviewedAt)
+    reviewedAt: timestampToIso(data.reviewedAt),
+    reviewDueAt: dueDate ? dueDate.toISOString() : null,
+    reviewOverdue: Boolean(dueDate && dueDate.getTime() < Date.now()),
+    reviewWindowDays,
+    accessExpiresAt: timestampToIso(data.accessExpiresAt),
+    defaultAccessDurationDays: data.defaultAccessDurationDays || 0
   };
 }
 
@@ -246,6 +313,12 @@ async function updateAccessDecision(req, action) {
   const auditRef = adminDb.collection("auditLog").doc();
   const requestedExcludedDocumentIds = cleanDocumentIds(req.body.excludedDocumentIds);
   const preflightSnapshot = await requestRef.get();
+  const settings = (action === "approve" || action === "grant")
+    ? await loadAccessRequestSettings()
+    : null;
+  const accessExpiresAt = settings
+    ? accessExpirationTimestamp(settings.defaultAccessDurationDays)
+    : null;
 
   if (!preflightSnapshot.exists) {
     throw createRouteError(404, "Access request not found.");
@@ -314,6 +387,14 @@ async function updateAccessDecision(req, action) {
       decisionMessage
     };
 
+    if (config.nextStatus === "approved") {
+      requestUpdate.defaultAccessDurationDays = settings.defaultAccessDurationDays;
+      requestUpdate.accessExpiresAt = accessExpiresAt;
+    } else {
+      requestUpdate.defaultAccessDurationDays = 0;
+      requestUpdate.accessExpiresAt = null;
+    }
+
     if (folderScope) {
       requestUpdate.excludedDocumentIds = folderScope.excludedDocumentIds;
       requestUpdate.excludedDocumentCount = folderScope.excludedDocumentCount;
@@ -362,12 +443,17 @@ async function updateAccessDecision(req, action) {
 
 // Lists access requests oldest first so admins can review the queue fairly.
 router.get("/", async (req, res) => {
-  const snapshot = await adminDb
-    .collection("accessRequests")
-    .orderBy("createdAt", "asc")
-    .get();
+  const [snapshot, settings] = await Promise.all([
+    adminDb
+      .collection("accessRequests")
+      .orderBy("createdAt", "asc")
+      .get(),
+    loadAccessRequestSettings()
+  ]);
 
-  const requests = snapshot.docs.map(formatRequestSnapshot);
+  const requests = snapshot.docs.map((requestSnapshot) => (
+    formatRequestSnapshot(requestSnapshot, settings)
+  ));
 
   res.status(200).json({ requests });
 });
@@ -512,13 +598,16 @@ router.patch("/:requestId/exclusions", async (req, res) => {
 
 // Lists the current customer's request history through Express.
 customerAccessRequestsRouter.get("/", async (req, res) => {
-  const snapshot = await adminDb
-    .collection("accessRequests")
-    .where("customerId", "==", req.auth.uid)
-    .get();
+  const [snapshot, settings] = await Promise.all([
+    adminDb
+      .collection("accessRequests")
+      .where("customerId", "==", req.auth.uid)
+      .get(),
+    loadAccessRequestSettings()
+  ]);
 
   const requests = snapshot.docs
-    .map(formatRequestSnapshot)
+    .map((requestSnapshot) => formatRequestSnapshot(requestSnapshot, settings))
     .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
 
   res.status(200).json({ requests });
@@ -584,9 +673,10 @@ customerAccessRequestsRouter.post("/", async (req, res) => {
       const requestSnapshot = await transaction.get(requestRef);
 
       if (requestSnapshot.exists) {
-        const currentStatus = requestSnapshot.data().status;
+        const currentRequest = requestSnapshot.data();
+        const currentStatus = currentRequest.status;
 
-        if (currentStatus === "pending" || currentStatus === "approved") {
+        if (requestBlocksNewSubmission(currentRequest)) {
           throw createRouteError(
             409,
             `This folder request is already ${currentStatus}.`
@@ -650,9 +740,10 @@ customerAccessRequestsRouter.post("/", async (req, res) => {
     }
 
     if (requestSnapshot.exists) {
-      const currentStatus = requestSnapshot.data().status;
+      const currentRequest = requestSnapshot.data();
+      const currentStatus = currentRequest.status;
 
-      if (currentStatus === "pending" || currentStatus === "approved") {
+      if (requestBlocksNewSubmission(currentRequest)) {
         throw createRouteError(
           409,
           `This document request is already ${currentStatus}.`

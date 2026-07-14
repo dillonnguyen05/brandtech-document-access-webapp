@@ -70,6 +70,11 @@ import {
   revokeCustomer,
   revokeUserAdmin
 } from "../services/userService.js";
+// Functions from settingsService.js; check and save admin access request defaults through Express.
+import {
+  loadAccessRequestDefaults,
+  saveAccessRequestDefaults
+} from "../services/settingsService.js";
 const BS_BLACK = "#101820";
 const BS_GOLD = "#F2A900";
 const BS_MAROON = "#8A2A2B";
@@ -86,6 +91,7 @@ function StatusBadge({ status }) {
     active: { bg: "rgba(34,197,94,0.12)", color: "#166534", label: "Active" },
     denied: { bg: "rgba(138,42,43,0.12)", color: BS_MAROON, label: "Denied" },
     revoked: { bg: "rgba(138,42,43,0.12)", color: BS_MAROON, label: "Revoked" },
+    expired: { bg: "rgba(138,42,43,0.12)", color: BS_MAROON, label: "Expired" },
     "Access Granted": { bg: "rgba(34,197,94,0.12)", color: "#166534", label: "Access Granted" },
     "Access Denied": { bg: "rgba(138,42,43,0.12)", color: BS_MAROON, label: "Access Denied" },
     "Access Revoked": { bg: "rgba(138,42,43,0.12)", color: BS_MAROON, label: "Access Revoked" },
@@ -3016,7 +3022,15 @@ function RequestsTable({
                     </div>
                   </div>
                 </td>
-                <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{req.dateRequested}</td>
+                <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>
+                  <div>{req.dateRequested}</div>
+                  {req.status === "pending" && req.reviewDueDate !== "—" && <div
+                    className="mt-1"
+                    style={{ color: req.reviewOverdue ? BS_MAROON : BS_GRAY, fontWeight: req.reviewOverdue ? 600 : 400 }}
+                  >
+                    {req.reviewOverdue ? "Escalate" : "Due"} {req.reviewDueDate}
+                  </div>}
+                </td>
                 <td className="px-4 py-3.5">
                   <StatusBadge status={req.status} />
                 </td>
@@ -4461,6 +4475,11 @@ function SettingsContent({ user }) {
   const [companyInput, setCompanyInput] = useState("");
   const [userInput, setUserInput] = useState("");
   const [reviewWindow, setReviewWindow] = useState("7");
+  const [accessDuration, setAccessDuration] = useState("0");
+  const [defaultsLoading, setDefaultsLoading] = useState(true);
+  const [defaultsSaving, setDefaultsSaving] = useState(false);
+  const [defaultsError, setDefaultsError] = useState("");
+  const [defaultsMessage, setDefaultsMessage] = useState("");
   const [passwordForm, setPasswordForm] = useState({
     currentPassword: "",
     newPassword: "",
@@ -4523,6 +4542,59 @@ function SettingsContent({ user }) {
       setPasswordMessage("Password updated.");
     } finally {
       setPasswordSaving(false);
+    }
+  };
+
+  useEffect(() => {
+    let active = true;
+
+    /**
+     * Function from settingsService.js; loads saved review/access defaults from Express.
+     */
+    loadAccessRequestDefaults()
+      .then((settings) => {
+        if (!active) return;
+        setReviewWindow(String(settings.reviewWindowDays ?? 7));
+        setAccessDuration(String(settings.defaultAccessDurationDays ?? 0));
+        setDefaultsError("");
+      })
+      .catch((error) => {
+        console.error(error);
+        if (active) {
+          setDefaultsError(error.message || "Unable to load access request defaults.");
+        }
+      })
+      .finally(() => {
+        if (active) setDefaultsLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  /**
+   * Function from settingsService.js; saves review window and approved-access duration through Express.
+   */
+  const handleDefaultsSubmit = async (event) => {
+    event.preventDefault();
+    setDefaultsSaving(true);
+    setDefaultsError("");
+    setDefaultsMessage("");
+
+    try {
+      const settings = await saveAccessRequestDefaults({
+        reviewWindowDays: Number(reviewWindow),
+        defaultAccessDurationDays: Number(accessDuration)
+      });
+
+      setReviewWindow(String(settings.reviewWindowDays));
+      setAccessDuration(String(settings.defaultAccessDurationDays));
+      setDefaultsMessage("Access request defaults saved.");
+    } catch (error) {
+      setDefaultsError(error.message || "Unable to save access request defaults.");
+    } finally {
+      setDefaultsSaving(false);
     }
   };
 
@@ -4597,15 +4669,20 @@ function SettingsContent({ user }) {
         <div className="bg-white rounded-xl border border-gray-100 p-8">
           <h3 className="text-sm mb-1" style={{ color: BS_BLACK, fontWeight: 600 }}>Access Request Defaults</h3>
           <p className="text-xs mb-5" style={{ color: BS_GRAY }}>Default settings applied to all incoming document access requests.</p>
-          <div className="space-y-4">
+          <form onSubmit={handleDefaultsSubmit} className="space-y-4">
             <div>
               <label className="block text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 500 }}>Review Window (days)</label>
               <select
-    value={reviewWindow}
-    onChange={(e) => setReviewWindow(e.target.value)}
-    className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
-    style={{ color: BS_BLACK }}
-  >
+                value={reviewWindow}
+                onChange={(e) => {
+                  setReviewWindow(e.target.value);
+                  setDefaultsError("");
+                  setDefaultsMessage("");
+                }}
+                disabled={defaultsLoading}
+                className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900] disabled:opacity-60"
+                style={{ color: BS_BLACK }}
+              >
                 {["3", "5", "7", "14", "30"].map((d) => <option key={d} value={d}>{d} days</option>)}
               </select>
               <p className="text-xs mt-1" style={{ color: BS_GRAY }}>Requests not reviewed within this window are flagged for escalation.</p>
@@ -4613,21 +4690,37 @@ function SettingsContent({ user }) {
             <div>
               <label className="block text-xs mb-1.5" style={{ color: BS_GRAY, fontWeight: 500 }}>Default Document Access Duration</label>
               <select
-    className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
-    style={{ color: BS_BLACK }}
-    defaultValue="90"
-  >
-                {[["30", "30 days"], ["60", "60 days"], ["90", "90 days"], ["180", "6 months"], ["365", "1 year"], ["0", "No expiry"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                value={accessDuration}
+                onChange={(e) => {
+                  setAccessDuration(e.target.value);
+                  setDefaultsError("");
+                  setDefaultsMessage("");
+                }}
+                disabled={defaultsLoading}
+                className="w-full px-3 py-2.5 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900] disabled:opacity-60"
+                style={{ color: BS_BLACK }}
+              >
+                {[["0", "No expiry"], ["30", "30 days"], ["60", "60 days"], ["90", "90 days"], ["180", "6 months"], ["365", "1 year"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               </select>
-              <p className="text-xs mt-1" style={{ color: BS_GRAY }}>Approved access expires after this period unless renewed.</p>
+              <p className="text-xs mt-1" style={{ color: BS_GRAY }}>
+                No expiry keeps approved access active until an admin revokes it.
+              </p>
             </div>
+            {defaultsError && <div className="px-3 py-2 rounded-lg text-xs text-red-700 bg-red-50 border border-red-100">
+              {defaultsError}
+            </div>}
+            {defaultsMessage && <div className="px-3 py-2 rounded-lg text-xs text-green-700 bg-green-50 border border-green-100">
+              {defaultsMessage}
+            </div>}
             <button
-    className="px-5 py-2.5 rounded-lg text-sm transition-opacity hover:opacity-90"
-    style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 600 }}
-  >
-              Save Defaults
+              type="submit"
+              disabled={defaultsLoading || defaultsSaving}
+              className="px-5 py-2.5 rounded-lg text-sm transition-opacity hover:opacity-90 disabled:opacity-50"
+              style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 600 }}
+            >
+              {defaultsSaving ? "Saving..." : defaultsLoading ? "Loading..." : "Save Defaults"}
             </button>
-          </div>
+          </form>
         </div>
       </div>
 
