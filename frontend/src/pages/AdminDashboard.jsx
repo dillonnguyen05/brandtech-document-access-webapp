@@ -297,6 +297,22 @@ function accessRequestContainsDocument(request, document) {
 }
 
 /**
+ * Checks whether a folder belongs inside an approved folder access request.
+ */
+function accessRequestContainsFolder(request, folder) {
+  if ((request.resourceType || "") !== "folder") return false;
+
+  const requestFolderPath = request.folderPath || "";
+  const folderPath = folder.path || "";
+
+  if (request.folderId === folder.id) return true;
+  if (!requestFolderPath) return true;
+
+  return folderPath === requestFolderPath
+    || folderPath.startsWith(`${requestFolderPath}/`);
+}
+
+/**
  * Checks whether a document's target audience matches the folder-access customer.
  */
 function documentTargetsAccessRequest(request, document) {
@@ -1747,6 +1763,7 @@ function AdminDashboard() {
           {section === "access-management" && <AccessManagementContent
     approvedRequests={activeAccessRequests}
     documents={documents}
+    folders={folders}
     error={requestLoadError}
     onRevoke={revokeAccess}
     onSaveFolderExclusions={saveFolderAccessExclusions}
@@ -3181,15 +3198,18 @@ function RequestsTable({
 function AccessManagementContent({
   approvedRequests,
   documents,
+  folders,
   error,
   onRevoke,
   onSaveFolderExclusions
 }) {
   const [openFolderRequestId, setOpenFolderRequestId] = useState("");
+  const [folderPanelFolderId, setFolderPanelFolderId] = useState("");
   const [excludedDocumentIds, setExcludedDocumentIds] = useState(new Set());
   const [savingFolderRequestId, setSavingFolderRequestId] = useState("");
   const [folderPanelError, setFolderPanelError] = useState("");
   const [accessSearch, setAccessSearch] = useState("");
+  const folderMap = new Map(folders.map((folder) => [folder.id, folder]));
   const filteredApprovedRequests = approvedRequests.filter((request) => (
     matchesSearch(
       accessSearch,
@@ -3209,12 +3229,18 @@ function AccessManagementContent({
   const toggleFolderRequest = (request) => {
     if (openFolderRequestId === request.id) {
       setOpenFolderRequestId("");
+      setFolderPanelFolderId("");
       setExcludedDocumentIds(new Set());
       setFolderPanelError("");
       return;
     }
 
+    const requestRootFolderId = request.folderId
+      || folders.find((folder) => folder.path === request.folderPath)?.id
+      || "";
+
     setOpenFolderRequestId(request.id);
+    setFolderPanelFolderId(requestRootFolderId);
     setExcludedDocumentIds(new Set(request.excludedDocumentIds || []));
     setFolderPanelError("");
   };
@@ -3250,6 +3276,25 @@ function AccessManagementContent({
     } finally {
       setSavingFolderRequestId("");
     }
+  };
+
+  /**
+   * Adds or removes every document currently shown in the open folder panel.
+   */
+  const setVisibleDocumentsExcluded = (visibleDocuments, excluded) => {
+    setExcludedDocumentIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+
+      visibleDocuments.forEach((document) => {
+        if (excluded) {
+          nextIds.add(document.id);
+        } else {
+          nextIds.delete(document.id);
+        }
+      });
+
+      return nextIds;
+    });
   };
 
   return <div className="bg-white rounded-xl border border-gray-100">
@@ -3313,6 +3358,37 @@ function AccessManagementContent({
                 ))
               : [];
             const isOpen = openFolderRequestId === request.id;
+            const requestRootFolderId = request.folderId
+              || folders.find((folder) => folder.path === request.folderPath)?.id
+              || "";
+            const activePanelFolderId = isOpen
+              ? folderPanelFolderId || requestRootFolderId
+              : requestRootFolderId;
+            const activePanelFolder = folderMap.get(activePanelFolderId);
+            const canGoBackInPanel = Boolean(activePanelFolderId && activePanelFolderId !== requestRootFolderId);
+            const panelBreadcrumbs = isOpen
+              ? buildFolderBreadcrumbs(folders, activePanelFolderId).filter((breadcrumb) => {
+                if (!requestRootFolderId) return true;
+                if (!breadcrumb.id) return false;
+
+                const breadcrumbFolder = folderMap.get(breadcrumb.id);
+                return Boolean(breadcrumbFolder && accessRequestContainsFolder(request, breadcrumbFolder));
+              })
+              : [];
+            const visiblePanelFolders = isOpen
+              ? folders
+                .filter((folder) => (
+                  folder.parentFolderId === activePanelFolderId
+                  && accessRequestContainsFolder(request, folder)
+                ))
+                .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+              : [];
+            const visiblePanelDocuments = isOpen
+              ? folderDocuments.filter((document) => (
+                (document.folderId || "") === activePanelFolderId
+              ))
+              : [];
+            const panelItemCount = visiblePanelFolders.length + visiblePanelDocuments.length;
             const currentExcludedCount = isOpen
               ? excludedDocumentIds.size
               : (request.excludedDocumentIds || []).length;
@@ -3387,34 +3463,47 @@ function AccessManagementContent({
                 </td>
               </tr>,
               isFolder && isOpen && <tr key={`${request.id}-documents`}>
-                <td colSpan={7} className="px-4 pb-5" style={{ borderBottom: index < filteredApprovedRequests.length - 1 ? "1px solid #F3F4F6" : "none" }}>
-                  <div className="rounded-lg border border-gray-100 bg-gray-50 p-4">
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-3">
-                      <div>
-                        <h4 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Folder Documents</h4>
-                        <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
-                          Check documents to unshare them from this customer's folder access.
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setExcludedDocumentIds(new Set(folderDocuments.map((document) => document.id)))}
-                          className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs"
-                          style={{ color: BS_GRAY, fontWeight: 500 }}
-                        >
-                          Unshare all
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setExcludedDocumentIds(new Set())}
-                          className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs"
-                          style={{ color: BS_GRAY, fontWeight: 500 }}
-                        >
-                          Restore all
-                        </button>
-                        <button
-                          type="button"
+	                <td colSpan={7} className="px-4 pb-5" style={{ borderBottom: index < filteredApprovedRequests.length - 1 ? "1px solid #F3F4F6" : "none" }}>
+	                  <div className="rounded-lg border border-gray-100 bg-gray-50 p-4">
+	                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-3">
+	                      <div>
+	                        <h4 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>
+                            {activePanelFolder?.path || request.folderPath || "Folder Access"}
+                          </h4>
+	                        <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
+	                          Open subfolders, then check documents to unshare them from this customer's folder access.
+	                        </p>
+	                      </div>
+	                      <div className="flex flex-wrap items-center gap-2">
+                          {canGoBackInPanel && <button
+                            type="button"
+                            onClick={() => setFolderPanelFolderId(activePanelFolder?.parentFolderId || requestRootFolderId)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 text-xs"
+                            style={{ color: BS_GRAY, fontWeight: 500 }}
+                          >
+                            <ArrowLeft size={11} />
+                            Back
+                          </button>}
+	                        <button
+	                          type="button"
+	                          onClick={() => setVisibleDocumentsExcluded(visiblePanelDocuments, true)}
+                            disabled={visiblePanelDocuments.length === 0}
+	                          className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs"
+	                          style={{ color: BS_GRAY, fontWeight: 500 }}
+	                        >
+	                          Unshare shown
+	                        </button>
+	                        <button
+	                          type="button"
+	                          onClick={() => setVisibleDocumentsExcluded(visiblePanelDocuments, false)}
+                            disabled={visiblePanelDocuments.length === 0}
+	                          className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs"
+	                          style={{ color: BS_GRAY, fontWeight: 500 }}
+	                        >
+	                          Restore shown
+	                        </button>
+	                        <button
+	                          type="button"
                           onClick={() => saveExcludedDocuments(request.id)}
                           disabled={savingFolderRequestId === request.id}
                           className="px-3 py-1.5 rounded-lg text-xs disabled:opacity-50"
@@ -3425,20 +3514,64 @@ function AccessManagementContent({
                       </div>
                     </div>
 
-                    {folderPanelError && <div className="mb-3 px-3 py-2 rounded-lg text-xs text-red-700 bg-red-50 border border-red-100">
-                      {folderPanelError}
-                    </div>}
+	                    {folderPanelError && <div className="mb-3 px-3 py-2 rounded-lg text-xs text-red-700 bg-red-50 border border-red-100">
+	                      {folderPanelError}
+	                    </div>}
 
-                    <div className="rounded-lg border border-gray-100 bg-white max-h-80 overflow-y-auto">
-                      {folderDocuments.length === 0 ? <div className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
-                        No documents found inside this folder.
-                      </div> : folderDocuments.map((document, documentIndex) => {
+                      {panelBreadcrumbs.length > 0 && <div className="mb-3 flex flex-wrap items-center gap-1.5">
+                        {panelBreadcrumbs.map((breadcrumb, breadcrumbIndex) => <div key={breadcrumb.id || "root"} className="flex items-center gap-1.5">
+                          {breadcrumbIndex > 0 && <ChevronRight size={12} style={{ color: "#C4C9CE" }} />}
+                          <button
+                            type="button"
+                            onClick={() => setFolderPanelFolderId(breadcrumb.id)}
+                            className="px-2.5 py-1 rounded-lg text-xs border transition-colors hover:bg-white"
+                            style={{
+                              borderColor: breadcrumb.id === activePanelFolderId ? BS_GOLD : "#E5E7EB",
+                              color: breadcrumb.id === activePanelFolderId ? BS_BLACK : BS_GRAY,
+                              backgroundColor: breadcrumb.id === activePanelFolderId ? "#FFFFFF" : "transparent",
+                              fontWeight: breadcrumb.id === activePanelFolderId ? 600 : 500
+                            }}
+                          >
+                            {breadcrumb.name}
+                          </button>
+                        </div>)}
+                      </div>}
+
+	                    <div className="rounded-lg border border-gray-100 bg-white max-h-80 overflow-y-auto">
+	                      {panelItemCount === 0 ? <div className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
+	                        No subfolders or documents found here.
+	                      </div> : <>
+                          {visiblePanelFolders.map((folder, folderIndex) => <button
+                            key={folder.id}
+                            type="button"
+                            onClick={() => setFolderPanelFolderId(folder.id)}
+                            className="flex w-full items-start gap-3 px-4 py-3 text-left hover:bg-gray-50"
+                            style={{ borderBottom: folderIndex < panelItemCount - 1 ? "1px solid #F3F4F6" : "none" }}
+                          >
+                            <Folder size={14} className="mt-0.5 shrink-0" style={{ color: BS_GOLD }} />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="text-xs truncate" style={{ color: BS_BLACK, fontWeight: 600 }}>
+                                  {folder.name}
+                                </p>
+                                <span className="text-[11px] px-2 py-0.5 rounded-full" style={{ backgroundColor: "rgba(242,169,0,0.12)", color: "#A37200", fontWeight: 600 }}>
+                                  Folder
+                                </span>
+                              </div>
+                              <p className="text-[11px] mt-0.5 truncate" style={{ color: BS_GRAY }}>
+                                {folder.path}
+                              </p>
+                            </div>
+                            <ChevronRight size={13} className="mt-0.5 shrink-0" style={{ color: BS_GRAY }} />
+                          </button>)}
+                          {visiblePanelDocuments.map((document, documentIndex) => {
                         const isExcluded = excludedDocumentIds.has(document.id);
+                        const rowIndex = visiblePanelFolders.length + documentIndex;
 
                         return <label
                           key={document.id}
                           className="flex items-start gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50"
-                          style={{ borderBottom: documentIndex < folderDocuments.length - 1 ? "1px solid #F3F4F6" : "none" }}
+                          style={{ borderBottom: rowIndex < panelItemCount - 1 ? "1px solid #F3F4F6" : "none" }}
                         >
                           <input
                             type="checkbox"
@@ -3462,9 +3595,10 @@ function AccessManagementContent({
                           </div>
                         </label>;
                       })}
-                    </div>
-                  </div>
-                </td>
+                        </>}
+	                    </div>
+	                  </div>
+	                </td>
               </tr>
             ].filter(Boolean);
           })}
