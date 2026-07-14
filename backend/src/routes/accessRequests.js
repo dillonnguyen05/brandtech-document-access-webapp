@@ -143,12 +143,46 @@ function accessRequestExpired(accessRequest) {
 }
 
 /**
+ * Counts how many documents an approved folder request still shares.
+ */
+function folderRequestSharedDocumentCount(accessRequest) {
+  const folderDocumentCount = Number(accessRequest.folderDocumentCount || 0);
+  const excludedDocumentCount = Number(accessRequest.excludedDocumentCount || 0);
+
+  if (folderDocumentCount > 0) {
+    return Math.max(0, folderDocumentCount - excludedDocumentCount);
+  }
+
+  const approvedDocumentCount = Number(accessRequest.approvedDocumentCount);
+
+  if (
+    Number.isFinite(approvedDocumentCount)
+    && accessRequest.approvedDocumentCount !== undefined
+    && accessRequest.approvedDocumentCount !== null
+  ) {
+    return Math.max(0, approvedDocumentCount);
+  }
+
+  return excludedDocumentCount === 0 ? 1 : 0;
+}
+
+/**
  * Checks whether an existing request should block a duplicate customer request.
  */
 function requestBlocksNewSubmission(accessRequest) {
   if (accessRequest.status === "pending") return true;
 
-  return accessRequest.status === "approved" && !accessRequestExpired(accessRequest);
+  if (accessRequest.status !== "approved" || accessRequestExpired(accessRequest)) {
+    return false;
+  }
+
+  const resourceType = accessRequest.resourceType || (accessRequest.folderId ? "folder" : "document");
+
+  if (resourceType === "folder") {
+    return folderRequestSharedDocumentCount(accessRequest) > 0;
+  }
+
+  return true;
 }
 
 /**
@@ -604,6 +638,8 @@ router.patch("/:requestId/exclusions", async (req, res) => {
   batch.update(requestRef, {
     excludedDocumentIds: validExcludedDocumentIds,
     excludedDocumentCount: validExcludedDocumentIds.length,
+    approvedDocumentCount: folderScope.includedDocumentCount,
+    folderDocumentCount: folderScope.totalDocumentCount,
     reviewedAt: FieldValue.serverTimestamp(),
     reviewedBy: admin.id,
     reviewedByName: admin.name,

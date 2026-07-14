@@ -102,6 +102,8 @@ function StatusBadge({ status }) {
   const map = {
     pending: { bg: "rgba(242,169,0,0.12)", color: "#A37200", label: "Pending Review", icon: <Clock size={11} /> },
     approved: { bg: "rgba(34,197,94,0.12)", color: "#166534", label: "Approved", icon: <CheckCircle size={11} /> },
+    partial: { bg: "rgba(59,130,246,0.12)", color: "#1D4ED8", label: "Partially Approved", icon: <AlertCircle size={11} /> },
+    "not-shared": { bg: "rgba(138,42,43,0.12)", color: BS_MAROON, label: "Not Shared", icon: <AlertCircle size={11} /> },
     denied: { bg: "rgba(138,42,43,0.12)", color: BS_MAROON, label: "Denied", icon: <XCircle size={11} /> },
     revoked: { bg: "rgba(138,42,43,0.12)", color: BS_MAROON, label: "Revoked", icon: <AlertCircle size={11} /> },
     expired: { bg: "rgba(138,42,43,0.12)", color: BS_MAROON, label: "Expired", icon: <AlertCircle size={11} /> }
@@ -205,6 +207,77 @@ function folderCoveredByRequest(folder, request) {
 }
 
 /**
+ * Counts how many documents an approved folder request still shares.
+ */
+function folderSharedDocumentCount(request) {
+  const totalCount = Number(request.folderDocumentCount || 0);
+  const excludedCount = Number(request.excludedDocumentCount || 0);
+
+  if (totalCount > 0) {
+    return Math.max(0, totalCount - excludedCount);
+  }
+
+  const approvedCount = Number(request.approvedDocumentCount);
+
+  if (Number.isFinite(approvedCount) && request.approvedDocumentCount !== undefined && request.approvedDocumentCount !== null) {
+    return Math.max(0, approvedCount);
+  }
+
+  return request.status === "approved" && excludedCount === 0 ? 1 : 0;
+}
+
+/**
+ * Checks whether an approved folder request should still block a new folder request.
+ */
+function folderApprovalHasSharedDocuments(request) {
+  if (request.status !== "approved") return false;
+  if (request.resourceType !== "folder") return true;
+
+  return folderSharedDocumentCount(request) > 0;
+}
+
+/**
+ * Converts approved folder requests into full, partial, or not-shared display states.
+ */
+function folderRequestDisplayStatus(request) {
+  if (request.resourceType !== "folder" || request.status !== "approved") {
+    return request.status;
+  }
+
+  if (folderSharedDocumentCount(request) <= 0) {
+    return "not-shared";
+  }
+
+  return Number(request.excludedDocumentCount || 0) > 0 ? "partial" : "approved";
+}
+
+/**
+ * Checks whether a document belongs inside the requested folder scope.
+ */
+function folderRequestIncludesDocument(request, document) {
+  const requestFolderPath = request.folderPath || "";
+  const documentFolderPath = document.folderPath || "";
+
+  if (!requestFolderPath) return true;
+
+  return documentFolderPath === requestFolderPath
+    || documentFolderPath.startsWith(`${requestFolderPath}/`);
+}
+
+/**
+ * Shows document-level status inside a requested folder drill-down.
+ */
+function requestFolderDocumentStatus(request, document) {
+  if (request.status !== "approved") return request.status;
+
+  const excludedDocumentIds = Array.isArray(request.excludedDocumentIds)
+    ? request.excludedDocumentIds
+    : [];
+
+  return excludedDocumentIds.includes(document.id) ? "not-shared" : "approved";
+}
+
+/**
  * Shows customers when a folder approval only shared part of the requested folder.
  */
 function requestDecisionSummary(request) {
@@ -212,6 +285,11 @@ function requestDecisionSummary(request) {
 
   if (request.resourceType === "folder" && request.status === "approved" && excludedCount > 0) {
     const noun = excludedCount === 1 ? "item" : "items";
+
+    if (folderSharedDocumentCount(request) <= 0) {
+      return `${excludedCount} ${noun} not shared. You can request this folder again.`;
+    }
+
     return `${excludedCount} ${noun} not shared.`;
   }
 
@@ -221,9 +299,9 @@ function requestDecisionSummary(request) {
 /**
  * Builds breadcrumbs for customer folder browsing.
  */
-function buildFolderBreadcrumbs(folders, currentFolderId) {
+function buildFolderBreadcrumbs(folders, currentFolderId, rootLabel = "All Documents") {
   const folderMap = new Map(folders.map((folder) => [folder.id, folder]));
-  const breadcrumbs = [{ id: "", name: "All Documents" }];
+  const breadcrumbs = [{ id: "", name: rootLabel }];
   const trail = [];
   let folder = folderMap.get(currentFolderId);
 
@@ -260,24 +338,65 @@ function CustomerDashboard() {
   const [previewDocument, setPreviewDocument] = useState(null);
   const customerDocuments = documents.filter((document) => documentTargetsCustomer(document, user));
   const folderRequests = myRequests.filter((request) => request.resourceType === "folder");
-  const activeFolderRequests = folderRequests.filter((request) => (
-    request.status === "pending" || request.status === "approved"
-  ));
   const pendingFolderRequests = folderRequests.filter((request) => request.status === "pending");
-  const approvedFolderRequests = folderRequests.filter((request) => request.status === "approved");
-  const folderStatus = (folder) => {
-    if (approvedFolderRequests.some((request) => folderCoveredByRequest(folder, request))) {
-      return "approved";
+  const approvedFolderRequests = folderRequests.filter(folderApprovalHasSharedDocuments);
+  const folderRequestStats = (folder, request) => {
+    const excludedDocumentIds = new Set(
+      Array.isArray(request.excludedDocumentIds) ? request.excludedDocumentIds : []
+    );
+    const scopedDocuments = customerDocuments.filter((document) => (
+      folderContainsDocument(folder, document)
+      && folderRequestIncludesDocument(request, document)
+    ));
+    const sharedCount = scopedDocuments.filter((document) => (
+      !excludedDocumentIds.has(document.id)
+    )).length;
+
+    return {
+      totalCount: scopedDocuments.length,
+      sharedCount,
+      excludedCount: Math.max(0, scopedDocuments.length - sharedCount)
+    };
+  };
+  const folderRequestBlocksFolder = (folder, request) => {
+    if (!folderCoveredByRequest(folder, request)) return false;
+    if (request.status === "pending") return true;
+    if (request.status !== "approved") return false;
+
+    const stats = folderRequestStats(folder, request);
+
+    if (stats.totalCount === 0) {
+      return folderApprovalHasSharedDocuments(request);
     }
 
-    if (pendingFolderRequests.some((request) => folderCoveredByRequest(folder, request))) {
+    return stats.sharedCount > 0;
+  };
+  const folderRequestStatusForFolder = (folder, request) => {
+    if (!folderRequestBlocksFolder(folder, request)) return "";
+    if (request.status !== "approved") return request.status;
+
+    const stats = folderRequestStats(folder, request);
+
+    if (stats.totalCount > 0 && stats.sharedCount <= 0) return "not-shared";
+    if (stats.excludedCount > 0) return "partial";
+
+    return folderRequestDisplayStatus(request);
+  };
+  const folderStatus = (folder) => {
+    if (pendingFolderRequests.some((request) => folderRequestBlocksFolder(folder, request))) {
       return "pending";
+    }
+
+    const approvedRequest = approvedFolderRequests.find((request) => folderRequestBlocksFolder(folder, request));
+
+    if (approvedRequest) {
+      return folderRequestStatusForFolder(folder, approvedRequest);
     }
 
     return "";
   };
-  const requestableFolders = folders.filter((folder) => !activeFolderRequests.some((request) => (
-    folderCoveredByRequest(folder, request)
+  const requestableFolders = folders.filter((folder) => !folderRequests.some((request) => (
+    folderRequestBlocksFolder(folder, request)
   )));
   const approvedDocs = customerDocuments.filter((document) => (
     document.accessStatus === "approved" || document.approved === true
@@ -286,7 +405,11 @@ function CustomerDashboard() {
     approvedDocs.some((document) => folderContainsDocument(folder, document))
   ));
   const documentBreadcrumbs = buildFolderBreadcrumbs(documentFolders, documentFolderId);
-  const requestBreadcrumbs = buildFolderBreadcrumbs(folders, requestFolderId);
+  const requestBreadcrumbs = buildFolderBreadcrumbs(
+    folders,
+    requestFolderId,
+    "Documents/Folders Available"
+  );
   const currentDocumentFolder = documentFolders.find((folder) => folder.id === documentFolderId);
   const currentRequestFolder = folders.find((folder) => folder.id === requestFolderId);
   const visibleDocumentFolders = documentFolders.filter((folder) => (
@@ -715,6 +838,8 @@ function CustomerDashboard() {
   />}
           {section === "requests" && <RequestsSection
     myRequests={myRequests}
+    folders={folders}
+    customerDocuments={customerDocuments}
     visibleRequestFolders={visibleRequestFolders}
     visibleRequestDocuments={visibleRequestDocuments}
     requestBreadcrumbs={requestBreadcrumbs}
@@ -1119,6 +1244,8 @@ function DocumentsSection({
  */
 function RequestsSection({
   myRequests,
+  folders,
+  customerDocuments,
   visibleRequestFolders,
   visibleRequestDocuments,
   requestBreadcrumbs,
@@ -1130,13 +1257,50 @@ function RequestsSection({
   requestActionError,
   onRequestAccess
 }) {
-  const folderLocationLabel = currentRequestFolder?.path || "All Documents";
+  const [openRequestId, setOpenRequestId] = useState("");
+  const [openRequestFolderId, setOpenRequestFolderId] = useState("");
+  const folderLocationLabel = currentRequestFolder?.path || "Root";
   const parentFolderId = currentRequestFolder?.parentFolderId || "";
+  const openRequest = myRequests.find((request) => (
+    request.id === openRequestId && request.resourceType === "folder"
+  ));
+  const openRequestRootFolderId = openRequest?.folderId || "";
+  const openRequestActiveFolderId = openRequestFolderId || openRequestRootFolderId;
+  const openRequestActiveFolder = folders.find((folder) => folder.id === openRequestActiveFolderId);
+  const openRequestCanGoBack = Boolean(
+    openRequest
+      && openRequestActiveFolderId
+      && openRequestActiveFolderId !== openRequestRootFolderId
+  );
+  const openRequestChildFolders = openRequest
+    ? folders.filter((folder) => (
+      folder.parentFolderId === openRequestActiveFolderId
+      && folderCoveredByRequest(folder, openRequest)
+    ))
+    : [];
+  const openRequestDocuments = openRequest
+    ? customerDocuments.filter((document) => (
+      (document.folderId || "") === openRequestActiveFolderId
+      && folderRequestIncludesDocument(openRequest, document)
+    ))
+    : [];
   const requestButtonLabel = (status) => {
     if (status === "pending") return "Pending";
     if (status === "approved") return "Approved";
+    if (status === "partial") return "Partially Approved";
+    if (status === "not-shared") return "Request Again";
     if (status === "denied" || status === "revoked") return "Request Again";
     return "Request Document";
+  };
+  const toggleOpenRequest = (request) => {
+    if (openRequestId === request.id) {
+      setOpenRequestId("");
+      setOpenRequestFolderId("");
+      return;
+    }
+
+    setOpenRequestId(request.id);
+    setOpenRequestFolderId(request.folderId || "");
   };
 
   return <div className="space-y-6">
@@ -1147,9 +1311,11 @@ function RequestsSection({
         <div className="px-5 py-4 border-b border-gray-100 flex flex-col gap-3">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>{folderLocationLabel}</h3>
+              <h3 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Documents/Folders Available to Request</h3>
               <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
-                Browse folders, subfolders, and individual documents to request access
+                {requestFolderId
+                  ? `Browsing ${folderLocationLabel}`
+                  : "Browse folders, subfolders, and individual documents to request access"}
               </p>
             </div>
             {requestFolderId && <button
@@ -1185,7 +1351,7 @@ function RequestsSection({
           </div>}
         {visibleRequestFolders.length === 0 && visibleRequestDocuments.length === 0 ? <div className="p-8 text-center">
             <Folder size={28} className="mx-auto mb-3" style={{ color: "#D1D5DB" }} />
-            <p className="text-sm" style={{ color: BS_GRAY }}>No folders or documents are available here.</p>
+            <p className="text-sm" style={{ color: BS_GRAY }}>No documents or folders are available to request here.</p>
           </div> : <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -1235,7 +1401,7 @@ function RequestsSection({
 	    className="px-3 py-1.5 rounded-lg text-xs transition-opacity hover:opacity-80 disabled:opacity-50"
 	    style={{ backgroundColor: canRequest ? BS_GOLD : "#E5E7EB", color: canRequest ? BS_BLACK : BS_GRAY, fontWeight: 500 }}
 	  >
-                        {status === "approved" ? "Approved" : status === "pending" ? "Pending" : "Request Folder"}
+                        {status === "approved" ? "Approved" : status === "partial" ? "Partially Approved" : status === "pending" ? "Pending" : "Request Folder"}
 	                      </button>
                         </div>
                     </td>
@@ -1300,7 +1466,7 @@ function RequestsSection({
             <table className="w-full text-sm">
               <thead>
                 <tr style={{ backgroundColor: "#FAFAFA" }}>
-                  {["Item", "Type", "Date Requested", "Status", "Decision Message"].map((h) => <th key={h} className="px-4 py-3 text-left text-xs border-b border-gray-100" style={{ color: BS_GRAY, fontWeight: 500 }}>
+                  {["Item", "Type", "Date Requested", "Status", "Decision Message", "Action"].map((h) => <th key={h} className="px-4 py-3 text-left text-xs border-b border-gray-100" style={{ color: BS_GRAY, fontWeight: 500 }}>
                       {h}
                     </th>)}
                 </tr>
@@ -1315,14 +1481,111 @@ function RequestsSection({
 	                      </td>
 	                      <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{req.dateRequested}</td>
 		                      <td className="px-4 py-3.5">
-		                        <StatusBadge status={req.status} />
+		                        <StatusBadge status={folderRequestDisplayStatus(req)} />
 		                      </td>
                           <td className="px-4 py-3.5 text-xs max-w-[280px]" style={{ color: BS_GRAY }}>
                             {requestDecisionSummary(req)}
                           </td>
+                          <td className="px-4 py-3.5">
+                            {req.resourceType === "folder" ? <button
+    type="button"
+    onClick={() => toggleOpenRequest(req)}
+    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
+    style={{ borderColor: "#D1D5DB", color: BS_GRAY, fontWeight: 600 }}
+  >
+                              {openRequestId === req.id ? "Close" : "Open"}
+                              {openRequestId !== req.id && <ChevronRight size={11} />}
+                            </button> : <span className="text-xs" style={{ color: "#B6BDC4" }}>—</span>}
+                          </td>
 	                    </tr>)}
 	              </tbody>
             </table>
+            {openRequest && <div className="border-t border-gray-100 bg-gray-50 px-5 py-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
+                  <div>
+                    <h4 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>
+                      {openRequestActiveFolder?.path || openRequest.folderPath || openRequest.documentTitle}
+                    </h4>
+                    <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
+                      Folder request contents and sharing status
+                    </p>
+                  </div>
+                  {openRequestCanGoBack && <button
+    type="button"
+    onClick={() => setOpenRequestFolderId(openRequestActiveFolder?.parentFolderId || openRequestRootFolderId)}
+    className="inline-flex items-center gap-1.5 self-start sm:self-auto px-3 py-1.5 rounded-lg text-xs border bg-white transition-opacity hover:opacity-80"
+    style={{ borderColor: "#D1D5DB", color: BS_GRAY, fontWeight: 600 }}
+  >
+                    <ArrowLeft size={12} />
+                    Back
+                  </button>}
+                </div>
+                {openRequestChildFolders.length === 0 && openRequestDocuments.length === 0 ? <div className="rounded-lg border border-gray-100 bg-white p-6 text-center">
+                    <Folder size={24} className="mx-auto mb-2" style={{ color: "#D1D5DB" }} />
+                    <p className="text-sm" style={{ color: BS_GRAY }}>No folder contents to show here.</p>
+                  </div> : <div className="overflow-x-auto rounded-lg border border-gray-100 bg-white">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr style={{ backgroundColor: "#FAFAFA" }}>
+                          {["Item", "Type", "Status", "Action"].map((h) => <th key={h} className="px-4 py-3 text-left text-xs border-b border-gray-100" style={{ color: BS_GRAY, fontWeight: 500 }}>
+                              {h}
+                            </th>)}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {openRequestChildFolders.map((folder) => <tr key={`requested-folder-${folder.id}`} style={{ borderBottom: "1px solid #F3F4F6" }}>
+                            <td className="px-4 py-3.5">
+                              <div className="flex items-center gap-3">
+                                <Folder size={15} style={{ color: BS_GOLD }} />
+                                <div>
+                                  <p className="font-medium" style={{ color: BS_BLACK }}>{folder.name}</p>
+                                  <p className="text-xs mt-1" style={{ color: BS_GRAY }}>{folder.path}</p>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <span className="text-xs px-2 py-0.5 rounded" style={{ backgroundColor: "rgba(242,169,0,0.12)", color: "#A37200" }}>
+                                Folder
+                              </span>
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <StatusBadge status={folderStatus(folder) || folderRequestDisplayStatus(openRequest)} />
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <button
+    type="button"
+    onClick={() => setOpenRequestFolderId(folder.id)}
+    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-opacity hover:opacity-80"
+    style={{ borderColor: "#D1D5DB", color: BS_GRAY, fontWeight: 600 }}
+  >
+                                Open <ChevronRight size={11} />
+                              </button>
+                            </td>
+                          </tr>)}
+                        {openRequestDocuments.map((document, index) => <tr key={`requested-document-${document.id}`} style={{ borderBottom: index < openRequestDocuments.length - 1 ? "1px solid #F3F4F6" : "none" }}>
+                            <td className="px-4 py-3.5">
+                              <div className="flex items-center gap-3">
+                                <FileText size={15} style={{ color: BS_GRAY }} />
+                                <div>
+                                  <p className="font-medium" style={{ color: BS_BLACK }}>{document.title}</p>
+                                  <p className="text-xs mt-1" style={{ color: BS_GRAY }}>{document.category} · {document.uploadedDate}</p>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <span className="text-xs px-2 py-0.5 rounded" style={{ backgroundColor: "#F3F4F6", color: BS_GRAY }}>
+                                {document.type}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <StatusBadge status={requestFolderDocumentStatus(openRequest, document)} />
+                            </td>
+                            <td className="px-4 py-3.5 text-xs" style={{ color: "#B6BDC4" }}>—</td>
+                          </tr>)}
+                      </tbody>
+                    </table>
+                  </div>}
+              </div>}
           </div>}
       </div>
     </div>;
