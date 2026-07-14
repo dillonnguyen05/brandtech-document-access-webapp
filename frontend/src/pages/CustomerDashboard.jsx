@@ -265,10 +265,18 @@ function folderRequestIncludesDocument(request, document) {
 }
 
 /**
+ * Checks whether the customer currently has usable access to a document.
+ */
+function documentIsApprovedForCustomer(document) {
+  return document.accessStatus === "approved" || document.approved === true;
+}
+
+/**
  * Shows document-level status inside a requested folder drill-down.
  */
 function requestFolderDocumentStatus(request, document) {
   if (request.status !== "approved") return request.status;
+  if (documentIsApprovedForCustomer(document)) return "approved";
 
   const excludedDocumentIds = Array.isArray(request.excludedDocumentIds)
     ? request.excludedDocumentIds
@@ -349,7 +357,7 @@ function CustomerDashboard() {
       && folderRequestIncludesDocument(request, document)
     ));
     const sharedCount = scopedDocuments.filter((document) => (
-      !excludedDocumentIds.has(document.id)
+      !excludedDocumentIds.has(document.id) || documentIsApprovedForCustomer(document)
     )).length;
 
     return {
