@@ -177,6 +177,57 @@ function formatRequestSnapshot(requestSnapshot, settings = {}) {
 }
 
 /**
+ * Loads customer profile fields that are useful in admin access-request tables.
+ */
+async function loadCustomerProfiles(customerIds) {
+  const uniqueCustomerIds = [...new Set(customerIds.filter(Boolean))];
+  const profiles = new Map();
+
+  if (uniqueCustomerIds.length === 0) return profiles;
+
+  const profileSnapshots = await adminDb.getAll(
+    ...uniqueCustomerIds.map((customerId) => adminDb.collection("users").doc(customerId))
+  );
+
+  profileSnapshots.forEach((profileSnapshot) => {
+    if (!profileSnapshot.exists) return;
+
+    const profile = profileSnapshot.data();
+
+    profiles.set(profileSnapshot.id, {
+      name: profile.name || "",
+      email: profile.email || "",
+      company: profile.company || "",
+      profilePhotoUrl: profile.profilePhotoUrl || ""
+    });
+  });
+
+  return profiles;
+}
+
+/**
+ * Merges latest customer profile display data into an access request row.
+ */
+function attachCustomerProfile(request, customerProfiles) {
+  const profile = customerProfiles.get(request.customerId);
+
+  if (!profile) {
+    return {
+      ...request,
+      customerProfilePhotoUrl: request.customerProfilePhotoUrl || ""
+    };
+  }
+
+  return {
+    ...request,
+    customerName: profile.name || request.customerName || "",
+    customerEmail: profile.email || request.customerEmail || "",
+    company: profile.company || request.company || "",
+    customerProfilePhotoUrl: profile.profilePhotoUrl || request.customerProfilePhotoUrl || ""
+  };
+}
+
+/**
  * Normalizes the current admin identity for audit records.
  */
 function adminIdentity(req) {
@@ -451,8 +502,14 @@ router.get("/", async (req, res) => {
     loadAccessRequestSettings()
   ]);
 
-  const requests = snapshot.docs.map((requestSnapshot) => (
+  const formattedRequests = snapshot.docs.map((requestSnapshot) => (
     formatRequestSnapshot(requestSnapshot, settings)
+  ));
+  const customerProfiles = await loadCustomerProfiles(
+    formattedRequests.map((request) => request.customerId)
+  );
+  const requests = formattedRequests.map((request) => (
+    attachCustomerProfile(request, customerProfiles)
   ));
 
   res.status(200).json({ requests });

@@ -130,6 +130,31 @@ function RoleBadge({ role }) {
   </span>;
 }
 
+/**
+ * Shows a customer/user avatar beside names in admin tables when a profile photo exists.
+ */
+function UserIdentityCell({ name, profilePhotoUrl, subtitle = "" }) {
+  const displayName = name || "—";
+  const initial = String(name || "?").trim().charAt(0).toUpperCase() || "?";
+
+  return <div className="flex items-center gap-2.5 min-w-0">
+    <div
+      className="h-8 w-8 shrink-0 overflow-hidden rounded-full flex items-center justify-center"
+      style={{ backgroundColor: "rgba(242,169,0,0.16)", color: BS_BLACK, fontWeight: 700 }}
+    >
+      {profilePhotoUrl ? <img
+        src={profilePhotoUrl}
+        alt={`${displayName} profile`}
+        className="h-full w-full object-cover"
+      /> : <span className="text-xs">{initial}</span>}
+    </div>
+    <div className="min-w-0">
+      <p className="truncate" style={{ color: BS_BLACK, fontWeight: 600 }}>{displayName}</p>
+      {subtitle && <p className="text-[11px] truncate mt-0.5" style={{ color: BS_GRAY }}>{subtitle}</p>}
+    </div>
+  </div>;
+}
+
 const NAV = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { key: "documents", label: "Documents", icon: FileText },
@@ -1977,7 +2002,12 @@ function DashboardRequestsTable({ requests }) {
             key={request.id}
             style={{ borderBottom: index < requests.length - 1 ? "1px solid #F3F4F6" : "none" }}
           >
-            <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>{request.customerName || "—"}</td>
+            <td className="px-4 py-3.5">
+              <UserIdentityCell
+                name={request.customerName}
+                profilePhotoUrl={request.customerProfilePhotoUrl}
+              />
+            </td>
             <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{request.company || "—"}</td>
             <td className="px-4 py-3.5 text-xs max-w-[260px]" style={{ color: BS_BLACK }}>
               <div className="flex items-center gap-2 min-w-0">
@@ -3039,7 +3069,12 @@ function RequestsTable({
 
             return [
               <tr key={req.id} style={{ borderBottom: isOpen ? "none" : i < requests.length - 1 ? "1px solid #F3F4F6" : "none" }}>
-                <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>{req.customerName}</td>
+                <td className="px-4 py-3.5">
+                  <UserIdentityCell
+                    name={req.customerName}
+                    profilePhotoUrl={req.customerProfilePhotoUrl}
+                  />
+                </td>
                 <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{req.company}</td>
                 <td className="px-4 py-3.5 text-xs max-w-[240px]" style={{ color: BS_BLACK }}>
                   <div className="flex items-center gap-2 min-w-0">
@@ -3398,7 +3433,12 @@ function AccessManagementContent({
                 key={request.id}
                 style={{ borderBottom: isOpen ? "none" : index < filteredApprovedRequests.length - 1 ? "1px solid #F3F4F6" : "none" }}
               >
-                <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>{request.customerName || "—"}</td>
+                <td className="px-4 py-3.5">
+                  <UserIdentityCell
+                    name={request.customerName}
+                    profilePhotoUrl={request.customerProfilePhotoUrl}
+                  />
+                </td>
                 <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{request.company || "—"}</td>
                 <td className="px-4 py-3.5 text-xs max-w-[260px]" style={{ color: BS_BLACK }}>
                   <button
@@ -3687,7 +3727,12 @@ function UserApprovalsContent({
     const hasLocation = hasRegistrationLocation(pendingUser.registrationLocation);
     const canApprove = pendingUser.emailVerified && hasLocation;
     return <tr key={pendingUser.id} style={{ borderBottom: i < filteredPendingUsers.length - 1 ? "1px solid #F3F4F6" : "none" }}>
-                <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>{pendingUser.name || "—"}</td>
+                <td className="px-4 py-3.5">
+                  <UserIdentityCell
+                    name={pendingUser.name}
+                    profilePhotoUrl={pendingUser.profilePhotoUrl}
+                  />
+                </td>
                 <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{pendingUser.company || "—"}</td>
                 <td className="px-4 py-3.5 text-xs" style={{ color: BS_BLACK }}>{pendingUser.email || "—"}</td>
                 <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{pendingUser.phone || "—"}</td>
@@ -3801,7 +3846,12 @@ function UserApprovalsContent({
       key={customer.id}
       style={{ borderBottom: index < filteredActiveCustomers.length - 1 ? "1px solid #F3F4F6" : "none" }}
     >
-                <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>{customer.name || "—"}</td>
+                <td className="px-4 py-3.5">
+                  <UserIdentityCell
+                    name={customer.name}
+                    profilePhotoUrl={customer.profilePhotoUrl}
+                  />
+                </td>
                 <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{customer.company || "—"}</td>
                 <td className="px-4 py-3.5 text-xs" style={{ color: BS_BLACK }}>{customer.email || "—"}</td>
                 <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{customer.phone || "—"}</td>
@@ -3908,7 +3958,12 @@ function OwnerUsersContent({
               key={account.id}
               style={{ borderBottom: index < filteredUsers.length - 1 ? "1px solid #F3F4F6" : "none" }}
             >
-              <td className="px-4 py-3.5 font-medium" style={{ color: BS_BLACK }}>{account.name || "—"}</td>
+              <td className="px-4 py-3.5">
+                <UserIdentityCell
+                  name={account.name}
+                  profilePhotoUrl={account.profilePhotoUrl}
+                />
+              </td>
               <td className="px-4 py-3.5 text-xs" style={{ color: BS_BLACK }}>{account.email || "—"}</td>
               <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{account.company || "—"}</td>
               <td className="px-4 py-3.5 text-xs" style={{ color: BS_GRAY }}>{account.phone || "—"}</td>
