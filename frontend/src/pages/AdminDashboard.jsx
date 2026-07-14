@@ -4470,10 +4470,6 @@ function FolderEditModal({
  */
 function SettingsContent({ user }) {
   const { changePassword } = useAuth();
-  const [autoCompanies, setAutoCompanies] = useState(["BrandTech Solutions", "Apex Industries"]);
-  const [autoUsers, setAutoUsers] = useState(["james.walker@apexind.com"]);
-  const [companyInput, setCompanyInput] = useState("");
-  const [userInput, setUserInput] = useState("");
   const [reviewWindow, setReviewWindow] = useState("7");
   const [accessDuration, setAccessDuration] = useState("0");
   const [defaultsLoading, setDefaultsLoading] = useState(true);
@@ -4598,16 +4594,6 @@ function SettingsContent({ user }) {
     }
   };
 
-  function addCompany() {
-    const v = companyInput.trim();
-    if (v && !autoCompanies.includes(v)) setAutoCompanies((p) => [...p, v]);
-    setCompanyInput("");
-  }
-  function addUser() {
-    const v = userInput.trim();
-    if (v && !autoUsers.includes(v)) setAutoUsers((p) => [...p, v]);
-    setUserInput("");
-  }
   return <div className="w-full space-y-8">
       {
     /* Avatar header */
@@ -4723,93 +4709,6 @@ function SettingsContent({ user }) {
           </form>
         </div>
       </div>
-
-      {
-    /* ── Auto-Approval Rules ── */
-  }
-      <div className="bg-white rounded-xl border border-gray-100 p-8">
-        <h3 className="text-sm mb-1" style={{ color: BS_BLACK, fontWeight: 600 }}>Auto-Approval Rules</h3>
-        <p className="text-xs mb-6" style={{ color: BS_GRAY }}>
-          Document access requests from these companies or individuals are automatically approved without manual review.
-        </p>
-        <div className="grid grid-cols-2 gap-8">
-          {
-    /* By Company */
-  }
-          <div>
-            <p className="text-xs mb-3" style={{ color: BS_GRAY, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>By Company</p>
-            <div className="flex gap-2 mb-3">
-              <input
-    value={companyInput}
-    onChange={(e) => setCompanyInput(e.target.value)}
-    onKeyDown={(e) => e.key === "Enter" && addCompany()}
-    placeholder="Company name…"
-    className="flex-1 px-3 py-2 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
-    style={{ color: BS_BLACK }}
-  />
-              <button
-    onClick={addCompany}
-    className="px-3 py-2 rounded-lg text-sm transition-opacity hover:opacity-80"
-    style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 600 }}
-  >
-                Add
-              </button>
-            </div>
-            <div className="space-y-2">
-              {autoCompanies.map((c) => <div key={c} className="flex items-center justify-between px-3 py-2 rounded-lg border border-gray-100 bg-gray-50">
-                  <span className="text-sm" style={{ color: BS_BLACK }}>{c}</span>
-                  <button
-    onClick={() => setAutoCompanies((p) => p.filter((x) => x !== c))}
-    className="text-xs px-2 py-0.5 rounded hover:bg-red-50 transition-colors"
-    style={{ color: BS_MAROON }}
-  >
-                    Remove
-                  </button>
-                </div>)}
-              {autoCompanies.length === 0 && <p className="text-xs py-2" style={{ color: BS_GRAY }}>No companies added yet.</p>}
-            </div>
-          </div>
-
-          {
-    /* By Individual */
-  }
-          <div>
-            <p className="text-xs mb-3" style={{ color: BS_GRAY, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>By Individual</p>
-            <div className="flex gap-2 mb-3">
-              <input
-    value={userInput}
-    onChange={(e) => setUserInput(e.target.value)}
-    onKeyDown={(e) => e.key === "Enter" && addUser()}
-    placeholder="Email address…"
-    type="email"
-    className="flex-1 px-3 py-2 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#F2A900]"
-    style={{ color: BS_BLACK }}
-  />
-              <button
-    onClick={addUser}
-    className="px-3 py-2 rounded-lg text-sm transition-opacity hover:opacity-80"
-    style={{ backgroundColor: BS_GOLD, color: BS_BLACK, fontWeight: 600 }}
-  >
-                Add
-              </button>
-            </div>
-            <div className="space-y-2">
-              {autoUsers.map((u) => <div key={u} className="flex items-center justify-between px-3 py-2 rounded-lg border border-gray-100 bg-gray-50">
-                  <span className="text-sm" style={{ color: BS_BLACK }}>{u}</span>
-                  <button
-    onClick={() => setAutoUsers((p) => p.filter((x) => x !== u))}
-    className="text-xs px-2 py-0.5 rounded hover:bg-red-50 transition-colors"
-    style={{ color: BS_MAROON }}
-  >
-                    Remove
-                  </button>
-                </div>)}
-              {autoUsers.length === 0 && <p className="text-xs py-2" style={{ color: BS_GRAY }}>No individuals added yet.</p>}
-            </div>
-          </div>
-        </div>
-      </div>
-
 
     </div>;
 }
