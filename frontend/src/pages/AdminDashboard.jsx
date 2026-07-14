@@ -1781,6 +1781,7 @@ function AdminDashboard() {
           {section === "requests" && <RequestsContent
     requests={pendingRequests}
     documents={documents}
+    folders={folders}
     error={requestLoadError}
     onApprove={approveRequest}
     onDeny={denyRequest}
@@ -2927,7 +2928,7 @@ function FolderShareFile({ file, depth, selectedPaths, setSelectedPaths }) {
 /**
  * Admin access-request queue wrapper.
  */
-function RequestsContent({ requests, documents, error, onApprove, onDeny }) {
+function RequestsContent({ requests, documents, folders, error, onApprove, onDeny }) {
   const [requestSearch, setRequestSearch] = useState("");
   const filteredRequests = requests.filter((request) => (
     matchesSearch(requestSearch, request.customerName, request.company)
@@ -2953,6 +2954,7 @@ function RequestsContent({ requests, documents, error, onApprove, onDeny }) {
       <RequestsTable
         requests={filteredRequests}
         documents={documents}
+        folders={folders}
         onApprove={onApprove}
         onDeny={onDeny}
         allowFolderReview
@@ -2968,15 +2970,18 @@ function RequestsContent({ requests, documents, error, onApprove, onDeny }) {
 function RequestsTable({
   requests,
   documents = [],
+  folders = [],
   onApprove,
   onDeny,
   allowFolderReview = true,
   emptyMessage = "No pending access requests."
 }) {
   const [openRequestId, setOpenRequestId] = useState("");
+  const [reviewFolderId, setReviewFolderId] = useState("");
   const [excludedDocumentIds, setExcludedDocumentIds] = useState(new Set());
   const [savingRequestId, setSavingRequestId] = useState("");
   const [reviewError, setReviewError] = useState("");
+  const folderMap = new Map(folders.map((folder) => [folder.id, folder]));
 
   /**
    * Opens a folder request for file-level approval editing.
@@ -2984,12 +2989,18 @@ function RequestsTable({
   const toggleFolderReview = (request) => {
     if (openRequestId === request.id) {
       setOpenRequestId("");
+      setReviewFolderId("");
       setExcludedDocumentIds(new Set());
       setReviewError("");
       return;
     }
 
+    const requestRootFolderId = request.folderId
+      || folders.find((folder) => folder.path === request.folderPath)?.id
+      || "";
+
     setOpenRequestId(request.id);
+    setReviewFolderId(requestRootFolderId);
     setExcludedDocumentIds(new Set(request.excludedDocumentIds || []));
     setReviewError("");
   };
@@ -3006,6 +3017,25 @@ function RequestsTable({
       } else {
         nextIds.add(documentId);
       }
+
+      return nextIds;
+    });
+  };
+
+  /**
+   * Includes or rejects every document currently shown in the folder approval panel.
+   */
+  const setVisibleDocumentsIncluded = (visibleDocuments, included) => {
+    setExcludedDocumentIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+
+      visibleDocuments.forEach((document) => {
+        if (included) {
+          nextIds.delete(document.id);
+        } else {
+          nextIds.add(document.id);
+        }
+      });
 
       return nextIds;
     });
@@ -3062,6 +3092,37 @@ function RequestsTable({
             const includedCount = isOpen
               ? folderDocuments.length - excludedDocumentIds.size
               : folderDocuments.length;
+            const requestRootFolderId = req.folderId
+              || folders.find((folder) => folder.path === req.folderPath)?.id
+              || "";
+            const activeReviewFolderId = isOpen
+              ? reviewFolderId || requestRootFolderId
+              : requestRootFolderId;
+            const activeReviewFolder = folderMap.get(activeReviewFolderId);
+            const canGoBackInReview = Boolean(activeReviewFolderId && activeReviewFolderId !== requestRootFolderId);
+            const reviewBreadcrumbs = isOpen
+              ? buildFolderBreadcrumbs(folders, activeReviewFolderId).filter((breadcrumb) => {
+                if (!requestRootFolderId) return true;
+                if (!breadcrumb.id) return false;
+
+                const breadcrumbFolder = folderMap.get(breadcrumb.id);
+                return Boolean(breadcrumbFolder && accessRequestContainsFolder(req, breadcrumbFolder));
+              })
+              : [];
+            const visibleReviewFolders = isOpen
+              ? folders
+                .filter((folder) => (
+                  folder.parentFolderId === activeReviewFolderId
+                  && accessRequestContainsFolder(req, folder)
+                ))
+                .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+              : [];
+            const visibleReviewDocuments = isOpen
+              ? folderDocuments.filter((document) => (
+                (document.folderId || "") === activeReviewFolderId
+              ))
+              : [];
+            const reviewItemCount = visibleReviewFolders.length + visibleReviewDocuments.length;
             const resourceTitle = req.documentTitle
               || req.folderPath
               || req.folderName
@@ -3135,30 +3196,43 @@ function RequestsTable({
                   <div className="rounded-lg border border-gray-100 bg-gray-50 p-4">
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-3">
                       <div>
-                        <h4 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>Review Folder Request</h4>
+                        <h4 className="text-sm" style={{ color: BS_BLACK, fontWeight: 600 }}>
+                          {activeReviewFolder?.path || req.folderPath || "Review Folder Request"}
+                        </h4>
                         <p className="text-xs mt-0.5" style={{ color: BS_GRAY }}>
-                          Checked files will be approved. Unchecked files are rejected from this folder access.
+                          Open subfolders, then keep checked documents approved. Unchecked documents are rejected from this folder access.
                         </p>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
+                        {canGoBackInReview && <button
+                          type="button"
+                          onClick={() => setReviewFolderId(activeReviewFolder?.parentFolderId || requestRootFolderId)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 text-xs"
+                          style={{ color: BS_GRAY, fontWeight: 500 }}
+                        >
+                          <ArrowLeft size={11} />
+                          Back
+                        </button>}
                         <span className="text-xs px-2.5 py-1 rounded-full" style={{ backgroundColor: "rgba(242,169,0,0.12)", color: "#A37200", fontWeight: 600 }}>
                           {includedCount}/{folderDocuments.length} selected
                         </span>
                         <button
                           type="button"
-                          onClick={() => setExcludedDocumentIds(new Set())}
+                          onClick={() => setVisibleDocumentsIncluded(visibleReviewDocuments, true)}
+                          disabled={visibleReviewDocuments.length === 0}
                           className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs"
                           style={{ color: BS_GRAY, fontWeight: 500 }}
                         >
-                          Include all
+                          Include shown
                         </button>
                         <button
                           type="button"
-                          onClick={() => setExcludedDocumentIds(new Set(folderDocuments.map((document) => document.id)))}
+                          onClick={() => setVisibleDocumentsIncluded(visibleReviewDocuments, false)}
+                          disabled={visibleReviewDocuments.length === 0}
                           className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs"
                           style={{ color: BS_GRAY, fontWeight: 500 }}
                         >
-                          Reject all
+                          Reject shown
                         </button>
                         <button
                           type="button"
@@ -3176,16 +3250,60 @@ function RequestsTable({
                       {reviewError}
                     </div>}
 
+                    {reviewBreadcrumbs.length > 0 && <div className="mb-3 flex flex-wrap items-center gap-1.5">
+                      {reviewBreadcrumbs.map((breadcrumb, breadcrumbIndex) => <div key={breadcrumb.id || "root"} className="flex items-center gap-1.5">
+                        {breadcrumbIndex > 0 && <ChevronRight size={12} style={{ color: "#C4C9CE" }} />}
+                        <button
+                          type="button"
+                          onClick={() => setReviewFolderId(breadcrumb.id)}
+                          className="px-2.5 py-1 rounded-lg text-xs border transition-colors hover:bg-white"
+                          style={{
+                            borderColor: breadcrumb.id === activeReviewFolderId ? BS_GOLD : "#E5E7EB",
+                            color: breadcrumb.id === activeReviewFolderId ? BS_BLACK : BS_GRAY,
+                            backgroundColor: breadcrumb.id === activeReviewFolderId ? "#FFFFFF" : "transparent",
+                            fontWeight: breadcrumb.id === activeReviewFolderId ? 600 : 500
+                          }}
+                        >
+                          {breadcrumb.name}
+                        </button>
+                      </div>)}
+                    </div>}
+
                     <div className="rounded-lg border border-gray-100 bg-white max-h-80 overflow-y-auto">
-                      {folderDocuments.length === 0 ? <div className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
-                        No requestable files were found inside this folder.
-                      </div> : folderDocuments.map((document, documentIndex) => {
+                      {reviewItemCount === 0 ? <div className="px-4 py-8 text-center text-sm" style={{ color: BS_GRAY }}>
+                        No requestable subfolders or files were found here.
+                      </div> : <>
+                        {visibleReviewFolders.map((folder, folderIndex) => <button
+                          key={folder.id}
+                          type="button"
+                          onClick={() => setReviewFolderId(folder.id)}
+                          className="flex w-full items-start gap-3 px-4 py-3 text-left hover:bg-gray-50"
+                          style={{ borderBottom: folderIndex < reviewItemCount - 1 ? "1px solid #F3F4F6" : "none" }}
+                        >
+                          <Folder size={14} className="mt-0.5 shrink-0" style={{ color: BS_GOLD }} />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="text-xs truncate" style={{ color: BS_BLACK, fontWeight: 600 }}>
+                                {folder.name}
+                              </p>
+                              <span className="text-[11px] px-2 py-0.5 rounded-full" style={{ backgroundColor: "rgba(242,169,0,0.12)", color: "#A37200", fontWeight: 600 }}>
+                                Folder
+                              </span>
+                            </div>
+                            <p className="text-[11px] mt-0.5 truncate" style={{ color: BS_GRAY }}>
+                              {folder.path}
+                            </p>
+                          </div>
+                          <ChevronRight size={13} className="mt-0.5 shrink-0" style={{ color: BS_GRAY }} />
+                        </button>)}
+                        {visibleReviewDocuments.map((document, documentIndex) => {
                         const isExcluded = excludedDocumentIds.has(document.id);
+                        const rowIndex = visibleReviewFolders.length + documentIndex;
 
                         return <label
                           key={document.id}
                           className="flex items-start gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50"
-                          style={{ borderBottom: documentIndex < folderDocuments.length - 1 ? "1px solid #F3F4F6" : "none" }}
+                          style={{ borderBottom: rowIndex < reviewItemCount - 1 ? "1px solid #F3F4F6" : "none" }}
                         >
                           <input
                             type="checkbox"
@@ -3211,6 +3329,7 @@ function RequestsTable({
                           </div>
                         </label>;
                       })}
+                      </>}
                     </div>
                   </div>
                 </td>
